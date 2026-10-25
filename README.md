@@ -67,3 +67,20 @@ Always skim `work/<book>/cleaned.txt` after a `--dry-run`. It contains exactly w
 ```
 
 This writes `voice_samples/index.html`, a page with a player for each voice. It also writes `voice_samples/all_voices.m4b`, which has one chapter per voice, so you can skip chapters in Apple Books or BookPlayer to compare voices.
+
+## Existing MP3 audiobook → chaptered M4B
+
+`audio2m4b.py` converts an audiobook you already have, for example a single 14-hour MP3, into an M4B with real chapter markers. It finds the chapters itself, fully offline:
+
+```bash
+# 1. Find chapters. It listens to the pause before each chapter with a local Whisper model.
+#    --toc (optional) takes exact titles from the book's PDF/EPUB bookmarks.
+.venv/bin/python audio2m4b.py detect book.mp3 --toc book.pdf
+
+# 2. Check work/<book>/chapters.tsv. Each line is "HH:MM:SS.mmm<TAB>Title". Fix or add lines as needed.
+
+# 3. Build
+.venv/bin/python audio2m4b.py build book.mp3 --cover cover.jpg --narrator "Name"
+```
+
+Chapter breaks in commercial audiobooks are about 3 s pauses where the narrator says "Chapter N …". With `--toc`, the tool lines the book's table of contents up against every pause in order. It tolerates Whisper misspelling unusual names, so it can match a title like "Kether" even when Whisper hears "chatter". It also reports any chapter it couldn't place, so you know what to check.

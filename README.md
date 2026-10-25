@@ -8,7 +8,7 @@ On an M1 Pro it runs at about **5.5× realtime** on CPU, so a 6.6-hour book take
 ## Install (macOS, Apple Silicon)
 
 ```bash
-git clone <this repo> && cd <repo>
+git clone https://github.com/TechnAudioToolz/pdf-epub-to-audiobook.git && cd pdf-epub-to-audiobook
 ./setup.sh    # installs python@3.12, ffmpeg, espeak-ng via Homebrew, then a .venv with pinned deps
 ```
 

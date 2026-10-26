@@ -31,7 +31,7 @@ SKIP_SECTIONS = re.compile(
     r"^\s*(references|bibliography|works cited|literature cited|index|notes|endnotes|"
     r"table of contents|contents|list of (figures|tables|abbreviations)|copyright|"
     r"acknowledg(e)?ments|appendix [a-z0-9]+|appendices|about the (author|publisher)|about .*publications?|"
-    r"also by .*|further reading)\s*$",
+    r"also by .*|further reading|title page|cover( page)?|colophon|half title)\s*$",
     re.I,
 )
 
@@ -57,8 +57,8 @@ class Book:
 # --------------------------------------------------------------------------- text cleanup
 
 ABBREVIATIONS = [
-    (r"\be\.g\.,?", "for example,"),
-    (r"\bi\.e\.,?", "that is,"),
+    (r"\be\.g\.?,?(?=\s)", "for example,"),
+    (r"\bi\.e\.?,?(?=\s)", "that is,"),
     (r"\bet al\.", "and colleagues"),
     (r"\betc\.", "et cetera."),
     (r"\bcf\.", "compare"),
@@ -501,7 +501,7 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
             continue
         print(f"[{i}/{len(book.chapters)}] {ch.title} ({len(ch.text):,} chars)", flush=True)
         pieces = []
-        spoken_title = re.sub(r"^\s*[\d.]+\s+", "", ch.title)  # "2.1 Methods" -> "Methods"
+        spoken_title = re.sub(r"^\s*([\d.]+|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "IV. Hod" -> title only
         for r in pipe(spoken_title, voice=voice, speed=speed):
             pieces.append(r.audio.numpy())
         pieces.append(title_gap)
@@ -589,6 +589,7 @@ def main():
     ap.add_argument("--chapters", help="only these chapters, e.g. '1-3,7' (handy for previews)")
     ap.add_argument("--fiction", action="store_true",
                     help="skip academic cleanup (citations, abbreviations, footnotes, captions)")
+    ap.add_argument("--cover", type=Path, help="cover image (jpg/png/webp); default: the book's own cover")
     ap.add_argument("--title", help="override book title")
     ap.add_argument("--author", help="override author")
     ap.add_argument("--bitrate", default="64k", help="AAC bitrate (64k is plenty for mono speech)")
@@ -603,6 +604,8 @@ def main():
     book = load_book(args.input, academic=not args.fiction)
     book.title = args.title or book.title
     book.author = args.author or book.author
+    if args.cover:
+        book.cover = args.cover.read_bytes()
     work = PROJECT / "work" / args.input.stem
     work.mkdir(parents=True, exist_ok=True)
 
@@ -626,6 +629,7 @@ def main():
     synthesize(book, audio, args.voice, args.speed, lang, only)
     name = f"{book.author} - {book.title}" if book.author else book.title
     out = args.output or PROJECT / "output" / (re.sub(r'[/:\\*?"<>|]+', "", name).strip() + ".m4b")
+    out = out.resolve()  # ffmpeg runs inside the work dir, so a relative -o would land there
     out.parent.mkdir(parents=True, exist_ok=True)
     if only:
         out = out.with_name(out.stem + ".preview.m4b")

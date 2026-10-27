@@ -478,9 +478,70 @@ def load_book(path: Path, academic: bool) -> Book:
     sys.exit(f"Unsupported file type: {ext}")
 
 
+# --------------------------------------------------------------------------- pronunciation
+
+PRONUNCIATIONS = PROJECT / "pronunciations.txt"
+
+
+def load_pronunciations(path=PRONUNCIATIONS):
+    """'Word = Sound-alike spelling' or 'Word = /phonemes/' per line; '#' starts a comment."""
+    rules = []
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                word, say = (x.strip() for x in line.split("=", 1))
+                if word and say:
+                    rules.append((re.compile(rf"\b{re.escape(word)}\b", re.I), word, say))
+    return rules
+
+
+def apply_pronunciations(text, rules):
+    for pat, word, say in rules:
+        if say.startswith("/") and say.endswith("/"):
+            text = pat.sub(lambda m: f"[{m.group(0)}]({say})", text)  # Kokoro's inline phoneme syntax
+        else:
+            text = pat.sub(say, text)
+    return text
+
+
+def spoken_chapter(ch, rules):
+    title = re.sub(r"^\s*([\d.]+|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "IV. Hod" -> title only
+    return apply_pronunciations(title, rules), [apply_pronunciations(p, rules) for p in ch.paragraphs]
+
+
+def chapter_wav(work, i, ch, rules):
+    """Cache file named by a hash of the exact spoken text, so changing a pronunciation
+    re-renders only the chapters that contain that word."""
+    import hashlib
+
+    title, paras = spoken_chapter(ch, rules)
+    digest = hashlib.sha1("\n".join([title, *paras]).encode()).hexdigest()[:10]
+    return work / f"{i:03d}_{digest}.wav"
+
+
+def list_unknown_words(book, rules, lang):
+    """Words missing from Kokoro's dictionary. They're guessed by a fallback and are the likeliest
+    to sound wrong, so they're the first candidates for pronunciations.txt."""
+    from misaki import en
+
+    g2p = en.G2P(trf=False, british=(lang == "b"), fallback=None)
+    known = {w.lower() for _, w, _ in rules}
+    counts = Counter(w for c in book.chapters for p in [c.title, *c.paragraphs]
+                     for w in re.findall(r"[A-Za-z][A-Za-z'’-]*[A-Za-z]", p))
+    unknown = Counter()
+    for w, n in counts.items():
+        if w.lower() in known:
+            continue
+        phonemes, _ = g2p(w)
+        if "❓" in phonemes:  # misaki marks words it can't find with a question-mark emoji
+            unknown[w] += n
+    return unknown
+
+
 # --------------------------------------------------------------------------- audio
 
-def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only: set | None):
+def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only: set | None, rules):
     import numpy as np
     import soundfile as sf
     from kokoro import KPipeline
@@ -494,18 +555,18 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
     for i, ch in enumerate(book.chapters, 1):
         if only and i not in only:
             continue
-        wav = work / f"{i:03d}.wav"
+        wav = chapter_wav(work, i, ch, rules)
         if wav.exists():
             print(f"[{i}/{len(book.chapters)}] {ch.title}: cached")
             done_chars += len(ch.text)
             continue
         print(f"[{i}/{len(book.chapters)}] {ch.title} ({len(ch.text):,} chars)", flush=True)
         pieces = []
-        spoken_title = re.sub(r"^\s*([\d.]+|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "IV. Hod" -> title only
+        spoken_title, spoken_paras = spoken_chapter(ch, rules)
         for r in pipe(spoken_title, voice=voice, speed=speed):
             pieces.append(r.audio.numpy())
         pieces.append(title_gap)
-        for p in ch.paragraphs:
+        for p in spoken_paras:
             for r in pipe(p, voice=voice, speed=speed, split_pattern=r"\n+"):
                 if r.audio is not None:
                     pieces.append(r.audio.numpy())
@@ -526,8 +587,8 @@ def wav_duration(path):
     return sf.info(str(path)).duration
 
 
-def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | None):
-    wavs = [(i, work / f"{i:03d}.wav") for i in range(1, len(book.chapters) + 1) if not only or i in only]
+def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules):
+    wavs = [(i, chapter_wav(work, i, ch, rules)) for i, ch in enumerate(book.chapters, 1) if not only or i in only]
     wavs = [(i, w) for i, w in wavs if w.exists()]
     if not wavs:
         sys.exit("No audio was generated.")
@@ -594,6 +655,8 @@ def main():
     ap.add_argument("--author", help="override author")
     ap.add_argument("--bitrate", default="64k", help="AAC bitrate (64k is plenty for mono speech)")
     ap.add_argument("--dry-run", action="store_true", help="list chapters and write cleaned text, no audio")
+    ap.add_argument("--list-unknown", action="store_true",
+                    help="list words Kokoro doesn't know (likely mispronounced), then stop")
     args = ap.parse_args()
 
     if not args.input.exists():
@@ -618,22 +681,34 @@ def main():
     for i, c in enumerate(book.chapters, 1):
         print(f"  {i:3d}. {c.title[:60]:60s} {len(c.text.split()):>7,} words")
     print(f"Cleaned text: {work / 'cleaned.txt'}")
+    rules = load_pronunciations()
+    lang = args.lang or args.voice.strip()[0]
+    if rules:
+        hits = sum(len(pat.findall(c.text)) for pat, _, _ in rules for c in book.chapters)
+        print(f"Pronunciations: {len(rules)} rules from {PRONUNCIATIONS.name}, {hits} uses in this book")
+    if args.list_unknown:
+        unknown = list_unknown_words(book, rules, lang)
+        (work / "unknown_words.txt").write_text("".join(f"{w}\t{n}\n" for w, n in unknown.most_common()))
+        print(f"\n{len(unknown)} words Kokoro will have to guess (most frequent first):")
+        print("  " + ", ".join(f"{w} ({n})" for w, n in unknown.most_common(60)))
+        print(f"Full list: {work / 'unknown_words.txt'}")
+        print('Hear one with: .venv/bin/python say.py "word"')
+        return
     if args.dry_run:
         return
 
     only = parse_range(args.chapters)
-    lang = args.lang or args.voice.strip()[0]
     # Cache audio per voice+speed so switching voices never reuses another voice's chapters.
     audio = work / f"audio_{args.voice.replace(',', '+')}_{args.speed:g}"
     audio.mkdir(exist_ok=True)
-    synthesize(book, audio, args.voice, args.speed, lang, only)
+    synthesize(book, audio, args.voice, args.speed, lang, only, rules)
     name = f"{book.author} - {book.title}" if book.author else book.title
     out = args.output or PROJECT / "output" / (re.sub(r'[/:\\*?"<>|]+', "", name).strip() + ".m4b")
     out = out.resolve()  # ffmpeg runs inside the work dir, so a relative -o would land there
     out.parent.mkdir(parents=True, exist_ok=True)
     if only:
         out = out.with_name(out.stem + ".preview.m4b")
-    package_m4b(book, audio, out, args.bitrate, only)
+    package_m4b(book, audio, out, args.bitrate, only, rules)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+# Pronunciation fixes, used by audiobook.py and say.py for every book.
+#
+# One word per line, in either of two forms:
+#   Word = Sound-alike spelling      e.g.  Enoch = Ee-nick
+#   Word = /phonemes/                e.g.  Enoch = /ˈinɪk/
+#
+# Matching ignores capitals and whole words only ("Enoch" won't touch "Enochian").
+# Try a spelling first:  .venv/bin/python say.py "the teacher of Enoch"
+# Words Kokoro has to guess (the usual suspects):  .venv/bin/python audiobook.py book.pdf --list-unknown
+# After editing, re-run audiobook.py. Only chapters containing a changed word are re-rendered.
+#
+# Lines starting with # are ignored. Remove the # to switch a rule on.
+
+Enoch = /ˈinɑk/      # "EE-nock" (chosen 2026-10-26)

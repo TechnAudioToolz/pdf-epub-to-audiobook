@@ -107,3 +107,20 @@ This project mostly connects other people's excellent open-source work. The real
 Written with the help of [Claude](https://claude.com/claude-code) (Anthropic).
 
 If this project helps you, please consider supporting the projects above as well.
+
+## Fixing pronunciations
+
+Names like *Kether*, *Malkuth* or *Enoch* sometimes come out wrong. Fix them once in `pronunciations.txt` and the fix applies to every book:
+
+```text
+Enoch = /ˈinɪk/          # exact phonemes (most reliable)
+Qliphoth = Klip-oth      # or a sound-alike spelling
+```
+
+```bash
+.venv/bin/python audiobook.py book.pdf --list-unknown   # words Kokoro has to guess: review these first
+.venv/bin/python say.py "the teacher of Enoch"          # hear it with your current rules
+.venv/bin/python say.py "Enoch" --raw                   # hear it without them, to compare
+```
+
+`say.py` prints the phonemes it used, so you can copy them into `pronunciations.txt` and adjust. Chapter audio is cached by its exact spoken text, so re-running `audiobook.py` after a change re-renders only the chapters that contain that word.

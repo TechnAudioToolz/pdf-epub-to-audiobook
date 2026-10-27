@@ -15,6 +15,7 @@ On an M1 Pro it runs at about **5.5× realtime** on CPU, so a 6.6-hour book take
 - Open the `.dmg` and drag **Audiobook Maker** to Applications.
 - The app isn't registered with Apple, so the first time macOS blocks it: go to **System Settings → Privacy and Security** and click **Open Anyway**. You only do this once.
 - On first launch it downloads its voice engine (about 1.3 GB, one time). After that it works offline and your books never leave your Mac.
+- **No internet on that Mac, or a slow connection?** Download **`Audiobook-Maker-0.1-offline.dmg`** from the same release instead (about 700 MB). Python, the libraries and all 28 English voices are inside it, so setup takes seconds and needs no connection.
 
 Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fix any mispronounced words, and render a queue of audiobooks with chapters and covers. Everything below is the command-line version of the same tools.
 
@@ -187,5 +188,7 @@ app/make_dmg.sh          # packages it as app/build/Audiobook Maker.dmg (drag-to
 - **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, default voice and speed, pronunciation lists, and the tools folder.
 
 **On a Mac without this project folder**, the app sets itself up on first launch: it downloads its own Python, the libraries, ffmpeg and the voice model into `~/Library/Application Support/Audiobook Maker/` (about 1.3 GB, one time, no Homebrew needed), and saves audiobooks to `~/Audiobooks`. After that it runs offline. The same installer can be run by hand: `UV=uv ./install_engine.sh <folder>`.
+
+**Offline edition:** `cd app && ./build.sh && ./make_offline_dmg.sh` builds `build/Audiobook Maker (offline).dmg`, with everything first-launch setup would download stored inside the app (`Contents/Resources/offline`: Python, the libraries as wheels, and the Kokoro model with the English voices). When the installer finds that folder it copies from it instead of downloading. The downloaded parts are kept in `app/build/offline-payload`, so later builds take about a minute.
 
 On a developer Mac the app is a front end only. It runs `audiobook.py` and `say.py` from the project folder it was built in, and its audiobooks go to `output/`. It's signed locally, without a paid Apple Developer account. On another Mac, the first launch is blocked once: open System Settings → Privacy and Security → Open Anyway.

@@ -4,6 +4,8 @@ import SwiftUI
 struct SetupView: View {
     @EnvironmentObject var model: AppModel
     @StateObject private var installer = Installer()
+    /// The offline edition carries the whole engine inside the app (make_offline_dmg.sh).
+    private let offline = Bundle.main.url(forResource: "offline", withExtension: nil) != nil
 
     var body: some View {
         VStack(spacing: 18) {
@@ -21,12 +23,17 @@ struct SetupView: View {
                         .font(.caption).foregroundColor(.secondary).lineLimit(1).truncationMode(.middle)
                 }
                 .frame(width: 440)
-                Text("This usually takes 5–15 minutes, depending on your internet connection.")
+                Text(offline ? "This takes about 2 minutes."
+                             : "This usually takes 5–15 minutes, depending on your internet connection.")
                     .font(.caption).foregroundColor(.secondary)
                 Button("Cancel") { installer.cancel() }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("Downloads the voice engine once: about 1.3 GB", systemImage: "arrow.down.circle")
+                    if offline {
+                        Label("Everything is included: no internet needed (uses about 1.3 GB)", systemImage: "shippingbox")
+                    } else {
+                        Label("Downloads the voice engine once: about 1.3 GB", systemImage: "arrow.down.circle")
+                    }
                     Label("After that everything runs on this Mac, offline", systemImage: "lock.shield")
                     Label("Your books are never uploaded anywhere", systemImage: "book.closed")
                 }

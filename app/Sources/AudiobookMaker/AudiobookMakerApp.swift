@@ -112,6 +112,11 @@ struct ContentView: View {
                 detail
                     .frame(minWidth: 400)
             }
+            if model.showLog {
+                Divider()
+                LogView()
+                    .frame(height: 200)
+            }
             statusBar
         }
         .toolbar {
@@ -120,6 +125,15 @@ struct ContentView: View {
                     .help("Add PDF, EPUB or TXT files, or a folder of them (⌘O)")
                     .keyboardShortcut("o")
                 if model.isRunning {
+                    if model.isPaused {
+                        Button { model.resume() } label: { Label("Resume", systemImage: "play.fill") }
+                            .keyboardShortcut("p")
+                            .help("Carry on rendering (⌘P)")
+                    } else {
+                        Button { model.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                            .keyboardShortcut("p")
+                            .help("Pause rendering; it uses no CPU until you resume (⌘P)")
+                    }
                     Button { model.stop() } label: { Label("Stop", systemImage: "stop.fill") }
                         .keyboardShortcut(".")
                         .help("Stop the queue (⌘.)")
@@ -135,6 +149,9 @@ struct ContentView: View {
                         NSWorkspace.shared.open(folder)
                     }
                 } label: { Label("Output folder", systemImage: "folder") }
+                Toggle(isOn: $model.showLog) { Label("Log", systemImage: "text.alignleft") }
+                    .keyboardShortcut("l")
+                    .help("Show what the engine is doing, paragraph by paragraph (⌘L)")
                 SettingsButton()
                 Button { openDonatePage() } label: { Label("Donate", systemImage: "heart") }
                     .help("Support this project")
@@ -231,6 +248,15 @@ func chooseBooks() -> [URL] {
 }
 
 @MainActor
+func chooseImage() -> URL? {
+    let panel = NSOpenPanel()
+    panel.message = "Choose a cover image"
+    panel.prompt = "Use as cover"
+    panel.allowedContentTypes = [.image]
+    panel.allowsMultipleSelection = false
+    return panel.runModal() == .OK ? panel.url : nil
+}
+
 func chooseFolder(_ message: String) -> URL? {
     let panel = NSOpenPanel()
     panel.message = message

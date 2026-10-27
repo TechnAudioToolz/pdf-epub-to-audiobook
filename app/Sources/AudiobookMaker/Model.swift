@@ -79,10 +79,21 @@ final class AppModel: ObservableObject {
     @Published var notifyWhenDone = UserDefaults.standard.object(forKey: "notifyWhenDone") as? Bool ?? true {
         didSet { UserDefaults.standard.set(notifyWhenDone, forKey: "notifyWhenDone") }
     }
-    /// false: skip page numbers, running headers, footnotes, references and the like (audiobook.py's default).
-    @Published var readAll = UserDefaults.standard.bool(forKey: "readAll") {
+    /// What audiobook.py skips by default, with the checkbox labels (its --keep names, same order as KEEP_CHOICES).
+    static let keepChoices: [(id: String, label: String)] = [
+        ("page-numbers", "Page numbers"),
+        ("headers", "Running headers and footers"),
+        ("footnotes", "Footnotes"),
+        ("tables", "Tables and chart labels"),
+        ("captions", "Figure and table captions"),
+        ("citations", "Citations, like (Smith, 2020) and [3]"),
+        ("links", "Web and email addresses"),
+        ("extras", "Front and back matter: copyright, contents, references, index, about the author"),
+    ]
+    /// The checked "Also read" boxes. Empty: read just the book.
+    @Published var keep = Set(UserDefaults.standard.stringArray(forKey: "keep") ?? []) {
         didSet {
-            UserDefaults.standard.set(readAll, forKey: "readAll")
+            UserDefaults.standard.set(Array(keep).sorted(), forKey: "keep")
             for book in books where book.state != .rendering { check(book) }  // chapter list changes
         }
     }
@@ -91,6 +102,12 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(outputFormat, forKey: "outputFormat") }
     }
     @Published var isRunning = false
+    @Published var isPaused = false
+    /// The engine's own output while rendering (the Log panel), newest last.
+    @Published var log: [String] = []
+    @Published var showLog = UserDefaults.standard.bool(forKey: "showLog") {
+        didSet { UserDefaults.standard.set(showLog, forKey: "showLog") }
+    }
     @Published var engine = Engine.locate()
     @Published var lastMessage = ""
 
@@ -171,7 +188,9 @@ final class AppModel: ObservableObject {
     private func commonArgs(_ book: Book) -> [String] {
         var args = [book.url.path, "--voice", voice, "--speed", String(format: "%.2f", speed)]
         if nameFromFile { args.append("--name-from-file") }
-        if readAll { args.append("--read-all") }
+        if !keep.isEmpty {
+            args += ["--keep", Self.keepChoices.map(\.id).filter(keep.contains).joined(separator: ",")]
+        }
         args += ["--format", outputFormat]
         if !notifyWhenDone { args.append("--no-notify") }
         if !outputPath.isEmpty || engine?.isAppInstall == true, let folder = outputFolder {
@@ -256,7 +275,32 @@ final class AppModel: ObservableObject {
 
     func stop() {
         stopRequested = true
+        if isPaused { resume() }  // a stopped process can't act on terminate until it runs again
         current?.terminate()
+    }
+
+    /// Freezes the render where it is (the engine process is suspended, so it uses no CPU) until Resume.
+    func pause() {
+        guard let process = current, process.isRunning, !isPaused else { return }
+        kill(process.processIdentifier, SIGSTOP)
+        isPaused = true
+        if let book = books.first(where: { $0.state == .rendering }) { book.detail = "Paused · " + book.detail }
+        appendLog("— Paused —")
+    }
+
+    func resume() {
+        guard let process = current, isPaused else { return }
+        kill(process.processIdentifier, SIGCONT)
+        isPaused = false
+        if let book = books.first(where: { $0.state == .rendering }) {
+            book.detail = book.detail.replacingOccurrences(of: "Paused · ", with: "")
+        }
+        appendLog("— Resumed —")
+    }
+
+    private func appendLog(_ line: String) {
+        log.append(line)
+        if log.count > 3000 { log.removeFirst(log.count - 3000) }
     }
 
     private func renderNext() {
@@ -273,8 +317,15 @@ final class AppModel: ObservableObject {
         book.detail = "Starting…"
         var skipped = false
         var lastError = ""
-        current = engine.run([engine.script("audiobook.py")] + commonArgs(book), onLine: { line in
-            if let p = EngineOutput.progress(line) {
+        var chapter: (index: Int, total: Int)?
+        appendLog("=== \(book.displayTitle) ===")
+        current = engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--verbose"], onLine: { [weak self] line in
+            self?.appendLog(line)
+            if let para = EngineOutput.paragraph(line), let ch = chapter {
+                // move the bar within the chapter too, so a long chapter visibly advances
+                book.progress = (Double(ch.index - 1) + Double(para.index - 1) / Double(para.total)) / Double(ch.total)
+            } else if let p = EngineOutput.progress(line) {
+                chapter = (p.index, p.total)
                 book.progress = Double(p.cached ? p.index : p.index - 1) / Double(p.total)
                 book.detail = "Chapter \(p.index) of \(p.total): \(p.title)"
             } else if let minutes = EngineOutput.minutesLeft(line) {
@@ -301,6 +352,7 @@ final class AppModel: ObservableObject {
                 book.state = .failed(lastError)
                 book.detail = lastError.isEmpty ? "Something went wrong" : lastError
             }
+            self?.isPaused = false
             self?.renderNext()
         })
     }

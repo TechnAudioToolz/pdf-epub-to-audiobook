@@ -90,18 +90,22 @@ struct BookDetail: View {
             Section {
                 HStack(alignment: .top, spacing: 14) {
                     VStack(spacing: 4) {
-                        CoverView(image: book.cover, width: 90)
-                            .overlay(RoundedRectangle(cornerRadius: 4)
-                                .stroke(coverTargeted ? Color.accentColor : .clear, lineWidth: 2))
-                            .accessibilityLabel(book.cover == nil ? "No cover. Drop an image file here to add one."
-                                                                  : "Cover image. Drop another image here to replace it.")
+                        Button { if let url = chooseImage() { model.setCover(url, for: book) } } label: {
+                            CoverView(image: book.cover, width: 90)
+                                .overlay(RoundedRectangle(cornerRadius: 4)
+                                    .stroke(coverTargeted ? Color.accentColor : .clear, lineWidth: 2))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Click to choose a cover image, or drop one here")
+                        .accessibilityLabel(book.cover == nil ? "No cover. Choose an image, or drop one here."
+                                                              : "Cover image. Choose another image, or drop one here.")
                             .onDrop(of: [.fileURL], isTargeted: $coverTargeted) { providers in
                                 loadURLs(providers) { urls in
                                     if let url = urls.first { model.setCover(url, for: book) }
                                 }
                                 return true
                             }
-                        Text("Drop a cover").font(.caption2).foregroundColor(.secondary)
+                        Text("Click or drop a cover").font(.caption2).foregroundColor(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("Title", text: $book.title)
@@ -192,9 +196,24 @@ struct ReadingOptions: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        Picker("Read", selection: $model.readAll) {
-            Text("The book (skip page numbers, headers, footnotes, references)").tag(false)
-            Text("Everything on the page").tag(true)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Also read")
+                Spacer()
+                Button("All") { model.keep = Set(AppModel.keepChoices.map(\.id)) }
+                    .disabled(model.keep.count == AppModel.keepChoices.count)
+                Button("None") { model.keep = [] }
+                    .disabled(model.keep.isEmpty)
+            }
+            ForEach(AppModel.keepChoices, id: \.id) { choice in
+                Toggle(choice.label, isOn: Binding(
+                    get: { model.keep.contains(choice.id) },
+                    set: { on in if on { model.keep.insert(choice.id) } else { model.keep.remove(choice.id) } }))
+                    .toggleStyle(.checkbox)
+            }
+            Text(model.keep.isEmpty ? "Unchecked: just the book is read, the way a narrator would."
+                                    : "Checked items are read aloud where they appear.")
+                .font(.caption).foregroundColor(.secondary)
         }
         Picker("Save as", selection: $model.outputFormat) {
             Text("One M4B audiobook with chapters").tag("m4b")
@@ -221,5 +240,37 @@ struct VoicePicker: View {
                 }
             }
         }
+    }
+}
+
+/// The engine's output, live: each chapter, each paragraph as it is read, timings and errors.
+struct LogView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    if model.log.isEmpty {
+                        Text("Start the queue to see each chapter and paragraph here as it's read.")
+                            .foregroundColor(.secondary)
+                    }
+                    ForEach(Array(model.log.enumerated()), id: \.offset) { i, line in
+                        Text(line)
+                            .foregroundColor(line.hasPrefix("  [p ") ? .secondary : .primary)
+                            .textSelection(.enabled)
+                            .id(i)
+                    }
+                }
+                .font(.system(.caption, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .onChange(of: model.log.count) { count in
+                proxy.scrollTo(count - 1, anchor: .bottom)
+            }
+        }
+        .accessibilityLabel("Engine log")
     }
 }

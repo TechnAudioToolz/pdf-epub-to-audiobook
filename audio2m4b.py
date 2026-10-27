@@ -58,7 +58,8 @@ ROMAN = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100}
 def toc_entries(path):
     """Spoken sections from a PDF/EPUB's bookmarks, in book order (skips cover, index, diagrams...)."""
     if path.suffix.lower() == ".pdf":
-        import pymupdf
+        from audiobook import import_pymupdf
+        pymupdf = import_pymupdf()
         raw = [t for _, t, _ in pymupdf.open(str(path)).get_toc()]
     else:
         from ebooklib import epub
@@ -169,9 +170,10 @@ def detect(args):
         cands = json.loads(cache.read_text())
         print(f"Using cached pause transcripts from {cache} (--rescan to redo)")
     else:
-        from audiobook import stay_offline_if_downloaded
+        from audiobook import quiet_onnxruntime, stay_offline_if_downloaded
 
         stay_offline_if_downloaded(f"Systran/faster-whisper-{args.model}", ["model.bin"])
+        quiet_onnxruntime()
         from faster_whisper import WhisperModel
 
         print("Scanning for pauses (a few minutes for a long book)...", flush=True)

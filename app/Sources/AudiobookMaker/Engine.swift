@@ -60,21 +60,40 @@ struct Engine {
 
     var isInstalled: Bool { FileManager.default.isExecutableFile(atPath: python.path) }
 
+    /// Runs Python with networking switched off by macOS itself, so no library it loads can reach the
+    /// internet (onnxruntime, for one, would otherwise report usage to Microsoft). Nothing the engine
+    /// does needs the network once setup has downloaded the model and voices.
+    func offlineCommand(_ arguments: [String]) -> (URL, [String]) {
+        let sandbox = "/usr/bin/sandbox-exec"
+        guard FileManager.default.isExecutableFile(atPath: sandbox) else { return (python, arguments) }
+        return (URL(fileURLWithPath: sandbox),
+                ["-p", "(version 1)(allow default)(deny network*)", python.path] + arguments)
+    }
+
+    /// Environment for the engine's Python.
+    var environment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        // Setup already downloaded the model and every English voice, so the engine never needs the
+        // internet: no update checks, no telemetry. It works the same with no connection at all.
+        env["HF_HUB_OFFLINE"] = "1"
+        env["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        env["DO_NOT_TRACK"] = "1"
+        // the installed copy's own ffmpeg first, then Homebrew (developer setups)
+        env["PATH"] = root.appendingPathComponent("bin").path + ":/opt/homebrew/bin:/usr/local/bin:"
+            + (env["PATH"] ?? "/usr/bin:/bin")
+        return env
+    }
+
     /// Runs a tool and streams its output line by line on the main thread.
     @discardableResult
     func run(_ arguments: [String],
              onLine: @escaping (String) -> Void,
              onExit: @escaping (Int32) -> Void) -> Process {
         let process = Process()
-        process.executableURL = python
-        process.arguments = arguments
+        (process.executableURL, process.arguments) = offlineCommand(arguments)
         process.currentDirectoryURL = root
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONUNBUFFERED"] = "1"
-        // the installed copy's own ffmpeg first, then Homebrew (developer setups)
-        env["PATH"] = root.appendingPathComponent("bin").path + ":/opt/homebrew/bin:/usr/local/bin:"
-            + (env["PATH"] ?? "/usr/bin:/bin")
-        process.environment = env
+        process.environment = environment
 
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -150,6 +169,12 @@ enum EngineOutput {
         let cached = m[3].hasSuffix(": cached")
         let title = m[3].replacingOccurrences(of: #"\s*(\([\d,]+ chars\)|: cached)$"#, with: "", options: .regularExpression)
         return (i, n, title, cached)
+    }
+
+    /// "  [p 12/340] First words of the paragraph…"  (--verbose)
+    static func paragraph(_ line: String) -> (index: Int, total: Int)? {
+        guard let m = match(#"^\s+\[p (\d+)/(\d+)\]"#, line), let i = Int(m[1]), let n = Int(m[2]) else { return nil }
+        return (i, n)
     }
 
     /// "    done; elapsed 12.3 min, ~45 min left"
@@ -257,14 +282,9 @@ final class SpeechServer {
         if let process, process.isRunning, root == engine.root { return }
         process?.terminate()
         let p = Process()
-        p.executableURL = engine.python
-        p.arguments = [engine.script("say.py"), "--serve"]
+        (p.executableURL, p.arguments) = engine.offlineCommand([engine.script("say.py"), "--serve"])
         p.currentDirectoryURL = engine.root
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PATH"] = engine.root.appendingPathComponent("bin").path + ":/opt/homebrew/bin:/usr/local/bin:"
-            + (env["PATH"] ?? "/usr/bin:/bin")
-        p.environment = env
+        p.environment = engine.environment
         let stdin = Pipe()
         p.standardInput = stdin
         p.standardOutput = FileHandle.nullDevice

@@ -63,6 +63,26 @@ def fix_espeak_data_path():
     EspeakWrapper.set_data_path(str(short))
 
 
+def import_pymupdf():
+    """PyMuPDF 2 loads its AI page-layout add-on on import, which uses Microsoft's onnxruntime. onnxruntime
+    reports usage to mobile.events.data.microsoft.com unless told not to, so switch that off first.
+    (The add-on itself stays: PyMuPDF reads pages better with it.)"""
+    quiet_onnxruntime()
+    import pymupdf
+
+    return pymupdf
+
+
+def quiet_onnxruntime():
+    """For tools that do need onnxruntime (Whisper's pause detection): switch off its usage reporting."""
+    try:
+        import onnxruntime
+
+        onnxruntime.disable_telemetry_events()
+    except Exception:
+        pass
+
+
 def stay_offline_if_downloaded(repo, files):
     """The model libraries check huggingface.co for updates every time they start. When the files a
     run needs are already downloaded, tell them to stay offline: nothing about your books is ever
@@ -82,6 +102,19 @@ SKIP_SECTIONS = re.compile(
     r"also by .*|further reading|the authors?|testimonials|praise for .*|this e-?book is licensed to.*|title page|cover( page)?|colophon|half title)\s*$",
     re.I,
 )
+
+
+# What the cleanup skips by default; --keep reads them anyway (the app's "Also read" checkboxes).
+KEEP_CHOICES = {
+    "page-numbers": "page numbers",
+    "headers": "running headers and footers (the book or chapter title on every page)",
+    "footnotes": "footnotes",
+    "tables": "tables and chart labels",
+    "captions": "figure and table captions",
+    "citations": "citations like (Smith, 2020) and [3]",
+    "links": "web and email addresses",
+    "extras": "front and back matter: copyright, contents, acknowledgments, references, index, about the author, ads",
+}
 
 
 @dataclass
@@ -122,20 +155,20 @@ ABBREVIATIONS = [
 ]
 
 
-def clean_paragraph(t: str, academic: bool, keep_all=False) -> str:
+def clean_paragraph(t: str, academic: bool, keep=frozenset()) -> str:
     t = unicodedata.normalize("NFKC", t)  # also expands ligatures like ﬁ ﬂ
     t = t.replace("­", "")  # soft hyphen
     t = re.sub(r"[\x00-\x09\x0b-\x1f\ufffd]", "", t)  # control chars / broken glyphs from form fields
     t = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", t)  # de-hyphenate line breaks
     t = re.sub(r"\s*\n\s*", " ", t)
     t = t.replace("`", "‘")  # OCR-era backtick quotes
-    if not keep_all:
+    if "links" not in keep:
         t = re.sub(r"https?://\S+|www\.\S+", "", t)
         t = re.sub(r"\S+@\S+\.\w+", "", t)  # emails
     # Footnote markers glued to punctuation or words: 'fact.4', 'Italia.“4', 'word¹'
     t = re.sub(r"([.,;:!?“”’\"')\]])\d{1,3}(?=\s|$)", r"\1", t)
     t = re.sub(r"[¹²³⁰-₟]+", "", t)
-    if academic and not keep_all:
+    if academic and "citations" not in keep:
         t = re.sub(r"\s*\[(\d+([,–\-]\s*\d+)*)\]", "", t)  # [3], [1, 4-6]
         # (Smith, 2020), (Smith & Lee, 2019; Doe et al., 2021a), (see Smith 2020, p. 4)
         t = re.sub(
@@ -168,16 +201,33 @@ def is_scene_break(t: str) -> bool:
     return bool(s) and bool(re.fullmatch(r"[\W_]{3,}", s))
 
 
+def title_and_author(title, author, path):
+    """The file's own title and author, unless they're junk (scanners leave things like "1", "Untitled" or
+    "Microsoft Word - draft.doc"); then the file name, read as "Author - Title" when it has that shape."""
+    def useful(v):
+        v = re.sub(r"\s+", " ", v or "").strip()
+        junk = re.match(r"(?i)^(untitled|unknown|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|.*\.(docx?|pdf|indd|rtf))$", v)
+        return v if len(re.findall(r"[^\W\d_]", v)) >= 3 and not junk else ""
+
+    title, author = useful(title), useful(author)
+    if not title:
+        stem = re.sub(r"[_]+", " ", path.stem).strip()
+        name_author, sep, name_title = stem.partition(" - ")
+        title = name_title.strip() if sep else stem
+        author = author or (name_author.strip() if sep else "")
+    return title, author
+
+
 # --------------------------------------------------------------------------- EPUB
 
-def load_epub(path: Path, academic: bool, keep_all=False) -> Book:
+def load_epub(path: Path, academic: bool, keep=frozenset()) -> Book:
     import ebooklib
     from bs4 import BeautifulSoup
     from ebooklib import epub
 
     book = epub.read_epub(str(path), options={"ignore_ncx": False})
     meta = lambda k: (book.get_metadata("DC", k) or [("", {})])[0][0]
-    title, author = meta("title"), meta("creator")
+    title, author = title_and_author(meta("title"), meta("creator"), path)
 
     cover = None
     for item in book.get_items():
@@ -214,7 +264,7 @@ def load_epub(path: Path, academic: bool, keep_all=False) -> Book:
                 stream.append(("p", txt))
 
     chapters = split_stream(stream, toc_titles=epub_toc_titles(book, stream))
-    return Book(title or path.stem, author, finalize(chapters, academic, keep_all), cover)
+    return Book(title, author, finalize(chapters, academic, keep), cover)
 
 
 def epub_toc_titles(book, stream):
@@ -299,12 +349,12 @@ def split_stream(stream, toc_titles):
 
 # --------------------------------------------------------------------------- PDF
 
-def load_pdf(path: Path, academic: bool, keep_all=False) -> Book:
-    import pymupdf
+def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
+    pymupdf = import_pymupdf()
 
     doc = pymupdf.open(str(path))
-    title = (doc.metadata or {}).get("title") or path.stem
-    author = (doc.metadata or {}).get("author") or ""
+    meta = doc.metadata or {}
+    title, author = title_and_author(meta.get("title"), meta.get("author"), path)
 
     pages = [extract_page_lines(p) for p in doc]
     empty = sum(1 for p in pages if not p)
@@ -317,12 +367,12 @@ def load_pdf(path: Path, academic: bool, keep_all=False) -> Book:
     body_size = body_font_size(pages)
     repeated = repeated_margin_text(pages)
 
-    # Build a paragraph stream per page, dropping headers/footers/footnotes/tables (unless keep_all).
+    # Build a paragraph stream per page, dropping headers/footers/footnotes/tables (unless kept).
     stream = []  # (page_no, kind, text)
     for pno, lines in enumerate(pages):
         para, last = [], None
         for ln in lines:
-            if not keep_all and is_page_furniture(ln, repeated, academic, body_size):
+            if is_page_furniture(ln, repeated, academic, body_size, keep):
                 continue
             heading = ln["size"] >= body_size * 1.15 or (ln["bold"] and len(ln["text"]) < 80 and ln["block_lines"] <= 2)
             new_para = (
@@ -344,24 +394,32 @@ def load_pdf(path: Path, academic: bool, keep_all=False) -> Book:
     # Sorted by page: some PDFs list a section after one that starts later in the book.
     toc = sorted(((lvl, t, pg - 1) for lvl, t, pg in doc.get_toc() if pg >= 1), key=lambda e: e[2])
     chapters = split_pdf_by_toc(stream, toc) if len(toc) >= 2 else split_pdf_by_headings(stream, pages, body_size)
-    return Book(title, author, finalize(chapters, academic, keep_all), pdf_cover(doc))
+    substantial = sum(1 for c in chapters if sum(len(p.split()) for p in c.paragraphs) >= 500)
+    if len(toc) < 2 and substantial < 4:
+        # Chapter titles drawn as pictures leave no headings in the text; the running header still names the chapter.
+        by_header = split_pdf_by_running_headers(stream, pages)
+        if len(by_header) >= 4:
+            chapters = by_header
+    return Book(title, author, finalize(chapters, academic, keep), pdf_cover(doc))
 
 
-def is_page_furniture(ln, repeated, academic, body_size):
-    """Page numbers, running headers, table cells, footnotes and captions: not read by default."""
-    if ln["margin"] and (margin_key(ln["text"]) in repeated or is_noise_line(ln["text"])):
-        return True
+def is_page_furniture(ln, repeated, academic, body_size, keep=frozenset()):
+    """Page numbers, running headers, table cells, footnotes and captions: not read unless in `keep`."""
+    if ln["margin"] and is_noise_line(ln["text"]):
+        return "page-numbers" not in keep
+    if ln["margin"] and margin_key(ln["text"]) in repeated:
+        return "headers" not in keep
     if ln["in_table"]:
-        return True
+        return "tables" not in keep
     if academic and ln["bottom"] and ln["size"] < body_size * 0.88:
-        return True  # footnote area
+        return "footnotes" not in keep  # footnote area
     if academic and re.match(r"^(Figure|Fig\.|Table|Chart|Source:)\s*\d*", ln["text"]) and ln["size"] <= body_size:
-        return True  # captions
+        return "captions" not in keep
     return False
 
 
 def extract_page_lines(page):
-    import pymupdf
+    pymupdf = import_pymupdf()
 
     h, w = page.rect.height, page.rect.width
     table_boxes = []
@@ -496,20 +554,64 @@ def split_pdf_by_headings(stream, pages, body_size):
         is_head = kind == "h" and len(txt) < 120 and heads[txt] < 3 and not is_noise_line(txt)
         if is_head and major_only and not MAJOR_HEADING.match(txt):
             # "CHAPTER 1" on one line and "The Problem" on the next: join them into one title
-            if not cur.paragraphs and re.fullmatch(r"\s*(chapter|section|part)\s+[\divxlc]+\s*", cur.title, re.I):
-                cur.title = f"{cur.title.strip()}: {txt.replace(chr(10), ' ').strip()}"
+            # (and a title that wraps onto a second heading line: "Ghosts and" + "Poltergeists")
+            m = re.fullmatch(r"\s*(chapter|section|part)\s+[\divxlc]+(:.*)?\s*", cur.title, re.I | re.S)
+            if not cur.paragraphs and m:
+                sep = " " if m.group(2) else ": "
+                cur.title = f"{cur.title.strip()}{sep}{txt.replace(chr(10), ' ').strip()}"
                 continue
             is_head = False
         if is_head:
+            # "Chapter 2" and its title in one block: "Chapter 2: The Greeters"
+            title = re.sub(r"^(\s*(?:chapter|section|part)\s+[\divxlc]+)\s*\n", r"\1: ", txt, flags=re.I).replace("\n", " ")
             if cur.paragraphs:
                 chapters.append(cur)
-                cur = Chapter(txt.replace("\n", " "))
+                cur = Chapter(title)
             else:
-                cur.title = (cur.title + " " if cur.title != "Opening" else "") + txt.replace("\n", " ")
+                cur.title = (cur.title + " " if cur.title != "Opening" else "") + title
         elif not is_noise_line(txt):
             cur.paragraphs.append(txt)
     chapters.append(cur)
     return chapters
+
+
+def split_pdf_by_running_headers(stream, pages):
+    """Chapters from the running header at the top of each page ("The Grand Tour" on the pages of that
+    chapter), for PDFs whose chapter titles are pictures. A header seen across much of the book is the
+    book's own title and is ignored."""
+    first, last, title = {}, {}, {}
+    for pno, lines in enumerate(pages):
+        for ln in lines:
+            if not ln["margin"] or ln["bottom"]:
+                continue
+            key = re.sub(r"[“”]", '"', margin_key(ln["text"])).strip("# ")
+            if not re.search(r"[a-z]{3}", key):
+                continue  # page numbers
+            first.setdefault(key, pno)
+            last[key] = pno
+            title.setdefault(key, re.sub(r"^\d+\s+|\s+\d+$", "", ln["text"].strip()))
+    keys = sorted((k for k in first if first[k] != last[k] and last[k] - first[k] < len(pages) * 0.3), key=first.get)
+    if len(keys) < 4:
+        return []
+
+    def opening(pno):  # a picture-only title page, or a first line in capitals: "NOT ALL OF MY INFORMATION…"
+        lines = pages[pno]
+        return not lines or bool(re.match(r"^[A-Z][A-Z’'\-]+( [A-Z’'\-]+){2,}", lines[0]["text"]))
+
+    # A chapter's first page has no header: start at the latest opening page before its first header.
+    bounds, prev_end = [], 0
+    for k in keys:
+        lo = prev_end
+        start = next((p for p in range(first[k], lo - 1, -1) if opening(p)), max(first[k] - 1, lo))
+        bounds.append((start, title[k]))
+        prev_end = last[k] + 1
+    chapters = [Chapter("Opening")]
+    for pno, kind, txt in stream:
+        while bounds and pno >= bounds[0][0]:
+            chapters.append(Chapter(bounds.pop(0)[1]))
+        if not is_noise_line(txt):
+            chapters[-1].paragraphs.append(txt)
+    return [c for c in chapters if c.paragraphs]
 
 
 def pdf_cover(doc):
@@ -593,19 +695,9 @@ def is_table_label(p):
     return len(words) <= 12 and sum(bool(re.fullmatch(r"[\d.,%:/()-]+", w)) for w in words) >= max(1, len(words) / 2)
 
 
-def finalize(chapters, academic, keep_all=False):
-    """Cleans each chapter. keep_all ("read everything") keeps page numbers, headers, references,
-    copyright pages and the like, and only drops lines with no words in them."""
-    if keep_all:
-        out = []
-        for ch in chapters:
-            paras = [ocr_repair(c) for c in (clean_paragraph(p, academic, keep_all=True) for p in ch.paragraphs)
-                     if re.search(r"\w", c)]
-            if sum(len(p) for p in paras) >= 200 or (paras and not out):
-                out.append(Chapter(re.sub(r"\s+", " ", ch.title).strip(), paras))
-            elif paras:
-                out[-1].paragraphs += paras  # tiny fragment: fold into previous chapter
-        return out
+def finalize(chapters, academic, keep=frozenset()):
+    """Cleans each chapter. `keep` (see KEEP_CHOICES) reads things the cleanup would otherwise skip."""
+    extras = "extras" in keep
     out = []
     # Short lines repeated all over the book are page furniture (running headers, table column labels):
     # keep the first one (often a real subheading) and drop the repeats.
@@ -613,44 +705,48 @@ def finalize(chapters, academic, keep_all=False):
     repeats = Counter(norm(p) for ch in chapters for p in ch.paragraphs if len(p.split()) <= 8)
     seen_repeat = set()
     for ch in chapters:
-        if SKIP_SECTIONS.match(ch.title) or re.match(r"^\s*(\d+\.?\s*)?references\s*$", ch.title, re.I):
+        if not extras and (SKIP_SECTIONS.match(ch.title) or re.match(r"^\s*(\d+\.?\s*)?references\s*$", ch.title, re.I)):
             continue
         paras = []
         for p in ch.paragraphs:
-            if academic and SKIP_SECTIONS.match(p.split("\n")[0]):
+            if academic and not extras and SKIP_SECTIONS.match(p.split("\n")[0]):
                 break  # e.g. a "References" heading inside the last chapter
-            c = clean_paragraph(p, academic)
-            if not c or is_noise_line(c) or FORM_ANSWERS.match(c) or is_table_label(c) or WATERMARK.search(p):
+            c = clean_paragraph(p, academic, keep)
+            if not re.search(r"\w", c):
+                continue  # nothing to say: scene-break glyphs, stray symbols
+            if is_noise_line(c) and "page-numbers" not in keep:
                 continue
-            if COPYRIGHT_LINE.search(c) or QR_PROMPT.match(c):
+            if is_table_label(c) and "tables" not in keep:
+                continue
+            if not extras and (FORM_ANSWERS.match(c) or WATERMARK.search(p) or COPYRIGHT_LINE.search(c) or QR_PROMPT.match(c)):
                 continue
             c = ocr_repair(c)
             k = norm(p)
-            if repeats.get(k, 0) >= 4:
+            if repeats.get(k, 0) >= 4 and "headers" not in keep:
                 if k in seen_repeat:
                     continue
                 seen_repeat.add(k)
             paras.append(c)
-        if sum(len(p) for p in paras) >= 200:
+        if sum(len(p) for p in paras) >= 200 or (extras and paras and not out):
             out.append(Chapter(re.sub(r"\s+", " ", ch.title).strip(), paras))  # no stray \r or \n in titles
         elif paras and out:
             out[-1].paragraphs += paras  # tiny fragment: fold into previous chapter
         # a tiny leading fragment (title page, dedication) is dropped
-    if len(out) > 2 and out[0].title in ("Opening", "Front matter") and sum(len(p.split()) for p in out[0].paragraphs) < 300:
+    if not extras and len(out) > 2 and out[0].title in ("Opening", "Front matter") and sum(len(p.split()) for p in out[0].paragraphs) < 300:
         out = out[1:]  # title page / dedication / list of tables before the first real heading
     return out
 
 
-def load_book(path: Path, academic: bool, keep_all=False) -> Book:
+def load_book(path: Path, academic: bool, keep=frozenset()) -> Book:
     ext = path.suffix.lower()
     if ext == ".pdf":
-        return load_pdf(path, academic, keep_all)
+        return load_pdf(path, academic, keep)
     if ext == ".epub":
-        return load_epub(path, academic, keep_all)
+        return load_epub(path, academic, keep)
     if ext in (".txt", ".md"):
         text = path.read_text(errors="ignore")
         paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
-        return Book(path.stem, "", finalize(split_stream([("p", p) for p in paras], []), academic, keep_all))
+        return Book(path.stem, "", finalize(split_stream([("p", p) for p in paras], []), academic, keep))
     sys.exit(f"Unsupported file type: {ext}")
 
 
@@ -814,7 +910,7 @@ def get_pipeline(lang):
     return _pipelines[lang]
 
 
-def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only: set | None, rules):
+def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only: set | None, rules, verbose=False):
     import numpy as np
     import soundfile as sf
     from kokoro import KPipeline
@@ -839,7 +935,9 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
         for r in pipe(spoken_title, voice=voice, speed=speed):
             pieces.append(r.audio.numpy())
         pieces.append(title_gap)
-        for p in spoken_paras:
+        for n, p in enumerate(spoken_paras, 1):
+            if verbose:  # what is being read right now: "  [p 12/340] First words of the paragraph…"
+                print(f"  [p {n}/{len(spoken_paras)}] {p[:110] + '…' if len(p) > 110 else p}", flush=True)
             for r in pipe(p, voice=voice, speed=speed, split_pattern=r"\n+"):
                 if r.audio is not None:
                     pieces.append(r.audio.numpy())
@@ -1035,7 +1133,8 @@ class Tee:
 
 def convert(path, args):
     """Convert one book. Returns (status, detail) where status is done / skipped / checked."""
-    book = load_book(path, academic=not args.fiction, keep_all=args.read_all)
+    keep = set(KEEP_CHOICES) if args.read_all else {k.strip() for k in (args.keep or "").split(",") if k.strip()}
+    book = load_book(path, academic=not args.fiction, keep=frozenset(keep))
     book.title = args.title or book.title
     book.author = args.author or book.author
     cover = args.cover or find_cover(path)
@@ -1082,7 +1181,7 @@ def convert(path, args):
     # Cache audio per voice+speed so switching voices never reuses another voice's chapters.
     audio = work / f"audio_{args.voice.replace(',', '+')}_{args.speed:g}"
     audio.mkdir(exist_ok=True)
-    synthesize(book, audio, args.voice, args.speed, lang, only, rules)
+    synthesize(book, audio, args.voice, args.speed, lang, only, rules, args.verbose)
     out.parent.mkdir(parents=True, exist_ok=True)
     package = package_mp3 if args.format == "mp3" else package_m4b
     package(book, audio, out, args.bitrate, only, rules, made_with(args.voice, args.speed))
@@ -1114,14 +1213,20 @@ def main():
     ap.add_argument("--format", choices=["m4b", "mp3"], default="m4b",
                     help="m4b: one audiobook file with chapters (default); mp3: a folder with one MP3 per chapter")
     ap.add_argument("--bitrate", default="64k", help="audio bitrate (64k is plenty for mono speech)")
-    ap.add_argument("--read-all", action="store_true",
-                    help="read everything on the page: page numbers, running headers, footnotes, tables, references, "
-                         "copyright pages (default: skip them)")
+    ap.add_argument("--keep", metavar="LIST",
+                    help="also read things the cleanup skips, comma-separated: " + ", ".join(KEEP_CHOICES)
+                         + " (e.g. --keep page-numbers,footnotes)")
+    ap.add_argument("--read-all", action="store_true", help="read everything on the page (all of --keep)")
     ap.add_argument("--dry-run", action="store_true", help="list chapters and write cleaned text, no audio")
     ap.add_argument("--list-unknown", action="store_true",
                     help="list words Kokoro doesn't know (likely mispronounced), then stop")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="print each paragraph as it is read, so you can follow along")
     ap.add_argument("--no-notify", action="store_true", help="no Mac notification when each book finishes")
     args = ap.parse_args()
+    unknown = {k.strip() for k in (args.keep or "").split(",") if k.strip()} - set(KEEP_CHOICES)
+    if unknown:
+        ap.error(f"--keep: unknown {', '.join(sorted(unknown))} (choose from {', '.join(KEEP_CHOICES)})")
 
     if not ffmpeg_exe():
         sys.exit("ffmpeg is required: pip install imageio-ffmpeg (or brew install ffmpeg)")

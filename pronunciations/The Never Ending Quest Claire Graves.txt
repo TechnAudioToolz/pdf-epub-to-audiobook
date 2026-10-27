@@ -1,0 +1,8 @@
+# Rules for The Never Ending Quest only (Graves' levels of existence).
+# Plain codes like AN, BO, CP, DQ, ER, FS are already spelled out correctly by Kokoro.
+A'N' = A-prime N-prime
+B'O' = B-prime O-prime
+C'P' = C-prime P-prime
+D'Q' = D-prime Q-prime
+E'R' = E-prime R-prime
+F'S' = F-prime S-prime

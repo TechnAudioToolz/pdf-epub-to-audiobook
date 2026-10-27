@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--voice", default="af_alloy")
     ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--raw", action="store_true", help="ignore pronunciations.txt")
+    ap.add_argument("--book", help="also apply pronunciations/<book>.txt (the PDF/EPUB file name without extension)")
     ap.add_argument("--no-play", action="store_true", help="only save the file")
     args = ap.parse_args()
 
@@ -34,7 +35,7 @@ def main():
     import soundfile as sf
     from kokoro import KPipeline
 
-    rules = [] if args.raw else load_pronunciations()
+    rules = [] if args.raw else load_pronunciations(book=args.book)
     pipe = KPipeline(lang_code=args.voice[0], repo_id="hexgrad/Kokoro-82M", device="cpu")
     gap = np.zeros(int(SAMPLE_RATE * 0.7), dtype=np.float32)
     pieces = []

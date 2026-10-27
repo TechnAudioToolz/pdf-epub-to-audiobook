@@ -12,3 +12,7 @@
 # Lines starting with # are ignored. Remove the # to switch a rule on.
 
 Enoch = /ˈinɑk/      # "EE-nock" (chosen 2026-10-26)
+
+# Common abbreviations
+tsp = teaspoon
+tbsp = tablespoon

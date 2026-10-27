@@ -28,10 +28,11 @@ PROJECT = Path(__file__).resolve().parent  # all output stays inside the project
 
 # Sections that are noise when listening to non-fiction / academic material.
 SKIP_SECTIONS = re.compile(
-    r"^\s*(references|bibliography|works cited|literature cited|index|notes|endnotes|"
+    r"^\s*((references|bibliography)( and (references|bibliography|notes))?|works cited|literature cited|"
+    r"index( [a-z])?|notes|endnotes|published by|.*bookstore|order form|other (books|titles) by .*|"
     r"table of contents|contents|list of (figures|tables|abbreviations)|copyright|"
-    r"acknowledg(e)?ments|appendix [a-z0-9]+|appendices|about the (author|publisher)|about .*publications?|"
-    r"also by .*|further reading|title page|cover( page)?|colophon|half title)\s*$",
+    r"acknowledg(e)?ments?|appendix [a-z0-9]+|appendices|about the (author|publisher)|about .*publications?|"
+    r"also by .*|further reading|the authors?|testimonials|praise for .*|this e-?book is licensed to.*|title page|cover( page)?|colophon|half title)\s*$",
     re.I,
 )
 
@@ -77,6 +78,7 @@ ABBREVIATIONS = [
 def clean_paragraph(t: str, academic: bool) -> str:
     t = unicodedata.normalize("NFKC", t)  # also expands ligatures like ﬁ ﬂ
     t = t.replace("­", "")  # soft hyphen
+    t = re.sub(r"[\x00-\x09\x0b-\x1f\ufffd]", "", t)  # control chars / broken glyphs from form fields
     t = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", t)  # de-hyphenate line breaks
     t = re.sub(r"\s*\n\s*", " ", t)
     t = t.replace("`", "‘")  # OCR-era backtick quotes
@@ -296,7 +298,8 @@ def load_pdf(path: Path, academic: bool) -> Book:
             stream.append((pno, "h" if last["heading"] else "p", "\n".join(para)))
 
     stream = join_cross_page_paragraphs(stream)
-    toc = [(lvl, t, pg - 1) for lvl, t, pg in doc.get_toc() if pg >= 1]
+    # Sorted by page: some PDFs list a section after one that starts later in the book.
+    toc = sorted(((lvl, t, pg - 1) for lvl, t, pg in doc.get_toc() if pg >= 1), key=lambda e: e[2])
     chapters = split_pdf_by_toc(stream, toc) if len(toc) >= 2 else split_pdf_by_headings(stream, pages, body_size)
     return Book(title, author, finalize(chapters, academic), pdf_cover(doc))
 
@@ -333,7 +336,7 @@ def extract_page_lines(page):
                     bold=all(s["flags"] & 16 or "Bold" in s["font"] for s in spans),
                     y0=y0, y1=y1, height=max(y1 - y0, 1),
                     block=bi, block_lines=len(blines),
-                    margin=y1 < h * 0.08 or y0 > h * 0.92,
+                    margin=y1 < h * 0.10 or y0 > h * 0.92,
                     bottom=y0 > h * 0.6,
                     in_table=any(r.contains(pymupdf.Point((x0 + x1) / 2, (y0 + y1) / 2)) for r in table_boxes),
                 )
@@ -420,11 +423,28 @@ def split_pdf_by_toc(stream, toc):
     return chapters
 
 
+MAJOR_HEADING = re.compile(
+    r"^\s*(chapter|section|part|book)\s+[\divxlc]+\b|^\s*(editors?.?s? )?(foreword|preface|introduction|prologue|"
+    r"epilogue|afterword|conclusion|appendix|glossary|bibliography|references|index|acknowledg)",
+    re.I,
+)
+
+
 def split_pdf_by_headings(stream, pages, body_size):
     heads = Counter(txt for _, k, txt in stream if k == "h")
+    # Books with explicit "Chapter N" headings: only those (and front/back-matter headings) start a
+    # chapter, so subheadings stay inside their chapter instead of becoming dozens of tiny ones.
+    major_only = sum(1 for t in heads if re.match(r"^\s*chapter\s+[\divxlc]+\b", t, re.I)) >= 3
     chapters, cur = [], Chapter("Opening")
     for _, kind, txt in stream:
-        if kind == "h" and len(txt) < 120 and heads[txt] < 3 and not is_noise_line(txt):
+        is_head = kind == "h" and len(txt) < 120 and heads[txt] < 3 and not is_noise_line(txt)
+        if is_head and major_only and not MAJOR_HEADING.match(txt):
+            # "CHAPTER 1" on one line and "The Problem" on the next: join them into one title
+            if not cur.paragraphs and re.fullmatch(r"\s*(chapter|section|part)\s+[\divxlc]+\s*", cur.title, re.I):
+                cur.title = f"{cur.title.strip()}: {txt.replace(chr(10), ' ').strip()}"
+                continue
+            is_head = False
+        if is_head:
             if cur.paragraphs:
                 chapters.append(cur)
                 cur = Chapter(txt.replace("\n", " "))
@@ -445,8 +465,85 @@ def pdf_cover(doc):
 
 # --------------------------------------------------------------------------- shared
 
+COPYRIGHT_LINE = re.compile(
+    r"library of congress|\bisbn\b|all rights reserved|printed in (the )?(usa|u\.s\.a|united states|canada|"
+    r"great britain|england)|^\W*(fax|tel|telephone|phone|e-?mail|homepage)\s*:|\bp\.?\s?o\.? box\b|"
+    r"^\W*copyright\s*(©|\(c\)|\d{4})", re.I)
+QR_PROMPT = re.compile(r"^\W*scan (this|the|here)\b.{0,40}\b(video|qr|code|link)\b", re.I)
+
+FUNCTION_WORDS = set("a an the of in on to for and or but is it if as at by be we he she was with that this from "
+                     "not are his her its their our your all any can".split())
+OCR_SWAPS = [("nn", "rm"), ("rn", "m"), ("nn", "m"), ("m", "rn"), ("cl", "d"), ("vv", "w"), ("ii", "u"), ("oo", "oa"),
+             ("1", "l"), ("0", "o")]
+_g2p = None
+_known_cache = {}
+
+
+def known_word(w):
+    """True if Kokoro's own word recogniser can pronounce w without guessing. It understands
+    endings (becomes, towards, therapists), which a plain word list doesn't."""
+    global _g2p
+    if w not in _known_cache:
+        if _g2p is None:
+            from misaki import en
+            _g2p = en.G2P(trf=False, british=False, fallback=None)
+        phonemes, _ = _g2p(w)
+        _known_cache[w] = "\u2753" not in phonemes
+    return _known_cache[w]
+
+
+def ocr_fix_word(w):
+    """Repair one word mangled by text recognition, but only when it isn't a real word and a classic
+    OCR mistake turns it into one: perfonn -> perform, ofthe -> of the, identifY -> identify."""
+    if len(w) < 3 or w.isupper() or known_word(w):
+        return w
+    name_like = w[0].isupper() and w[1:].islower()  # Bateson, Horney, Ann: never "repair" names
+    lower = w[0] + w[1:].lower()
+    if lower != w and known_word(lower):
+        return lower  # stray capital
+    if len(w) < 5 or name_like:
+        return w  # short words are often hyphenation fragments ("tion", "impor"); names stay as they are
+    if w.islower():
+        for i in range(2, len(w) - 1):  # run-together words: "ofthe", "meansthat"
+            a, b = w[:i], w[i:]
+            ok = ((a in FUNCTION_WORDS and (b in FUNCTION_WORDS or len(b) >= 4))  # of+the, in+depth
+                  or (b in FUNCTION_WORDS and len(a) >= 5))                        # means+that, subtle+and
+            if ok and known_word(a) and known_word(b):
+                return f"{a} {b}"
+    for bad, good in OCR_SWAPS:
+        start = w.find(bad)
+        while start != -1:
+            cand = w[:start] + good + w[start + len(bad):]
+            if known_word(cand):
+                return cand
+            start = w.find(bad, start + 1)
+    return w
+
+
+def ocr_repair(text):
+    text = re.sub(r"\b(him|his|he)l(her|herself|hers|she)\b", r"\1 or \2", text)  # "himlherself" = him/herself
+    # whole words including apostrophes, so "weren't" is checked as one word, not "weren" + "t"
+    return re.sub(r"[A-Za-z][A-Za-z0-9'\u2019]*[A-Za-z]", lambda m: ocr_fix_word(m.group(0)), text)
+
+
+# Per-copy licence watermarks name the buyer; never read them out.
+WATERMARK = re.compile(r"\bthis e-?book is licen[cs]ed to\b|\blicen[cs]ed to [^.]{0,80}@", re.I)
+FORM_ANSWERS = re.compile(r"^\W*((yes|no|true|false|agree|disagree)\W*)+$", re.I)
+
+
+def is_table_label(p):
+    """Short lines that are mostly numbers: chart axes, table cells ("4 5 6 7", "113 State")."""
+    words = p.split()
+    return len(words) <= 12 and sum(bool(re.fullmatch(r"[\d.,%:/()-]+", w)) for w in words) >= max(1, len(words) / 2)
+
+
 def finalize(chapters, academic):
     out = []
+    # Short lines repeated all over the book are page furniture (running headers, table column labels):
+    # keep the first one (often a real subheading) and drop the repeats.
+    norm = lambda p: re.sub(r"\s+", " ", p).strip().lower()
+    repeats = Counter(norm(p) for ch in chapters for p in ch.paragraphs if len(p.split()) <= 8)
+    seen_repeat = set()
     for ch in chapters:
         if SKIP_SECTIONS.match(ch.title) or re.match(r"^\s*(\d+\.?\s*)?references\s*$", ch.title, re.I):
             continue
@@ -455,13 +552,24 @@ def finalize(chapters, academic):
             if academic and SKIP_SECTIONS.match(p.split("\n")[0]):
                 break  # e.g. a "References" heading inside the last chapter
             c = clean_paragraph(p, academic)
-            if c and not is_noise_line(c):
-                paras.append(c)
+            if not c or is_noise_line(c) or FORM_ANSWERS.match(c) or is_table_label(c) or WATERMARK.search(p):
+                continue
+            if COPYRIGHT_LINE.search(c) or QR_PROMPT.match(c):
+                continue
+            c = ocr_repair(c)
+            k = norm(p)
+            if repeats.get(k, 0) >= 4:
+                if k in seen_repeat:
+                    continue
+                seen_repeat.add(k)
+            paras.append(c)
         if sum(len(p) for p in paras) >= 200:
-            out.append(Chapter(ch.title, paras))
+            out.append(Chapter(re.sub(r"\s+", " ", ch.title).strip(), paras))  # no stray \r or \n in titles
         elif paras and out:
             out[-1].paragraphs += paras  # tiny fragment: fold into previous chapter
         # a tiny leading fragment (title page, dedication) is dropped
+    if len(out) > 2 and out[0].title in ("Opening", "Front matter") and sum(len(p.split()) for p in out[0].paragraphs) < 300:
+        out = out[1:]  # title page / dedication / list of tables before the first real heading
     return out
 
 
@@ -483,16 +591,32 @@ def load_book(path: Path, academic: bool) -> Book:
 PRONUNCIATIONS = PROJECT / "pronunciations.txt"
 
 
-def load_pronunciations(path=PRONUNCIATIONS):
-    """'Word = Sound-alike spelling' or 'Word = /phonemes/' per line; '#' starts a comment."""
+def word_pattern(word):
+    """Whole-word match that also works for words with apostrophes (A'N') and keeps a trailing 's.
+    Words with two or more capitals (AN, SQL) match only in capitals, so 'AN' never touches 'an'."""
+    body = re.sub("['\u2019]", lambda m: "['\u2019]", re.escape(word))  # straight or curly apostrophe
+    flags = 0 if sum(ch.isupper() for ch in word) >= 2 else re.I
+    return re.compile(rf"(?<![\w'\u2019]){body}(?=(?:['\u2019]s)?(?![\w]))", flags)
+
+
+def book_pronunciations_path(stem):
+    return PROJECT / "pronunciations" / f"{stem}.txt"
+
+
+def load_pronunciations(path=PRONUNCIATIONS, book=None):
+    """'Word = Sound-alike spelling' or 'Word = /phonemes/' per line; '#' starts a comment.
+    Book-specific rules in pronunciations/<book>.txt are applied before the global ones."""
     rules = []
-    if path.exists():
-        for line in path.read_text().splitlines():
+    paths = ([book_pronunciations_path(book)] if book else []) + [path]
+    for f in paths:
+        if not f.exists():
+            continue
+        for line in f.read_text().splitlines():
             line = line.split("#", 1)[0].strip()
             if "=" in line:
                 word, say = (x.strip() for x in line.split("=", 1))
                 if word and say:
-                    rules.append((re.compile(rf"\b{re.escape(word)}\b", re.I), word, say))
+                    rules.append((word_pattern(word), word, say))
     return rules
 
 
@@ -506,7 +630,7 @@ def apply_pronunciations(text, rules):
 
 
 def spoken_chapter(ch, rules):
-    title = re.sub(r"^\s*([\d.]+|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "IV. Hod" -> title only
+    title = re.sub(r"^\s*([\d.]+|\d+:|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "01: Coaching", "IV. Hod" -> title only
     return apply_pronunciations(title, rules), [apply_pronunciations(p, rules) for p in ch.paragraphs]
 
 
@@ -681,11 +805,13 @@ def main():
     for i, c in enumerate(book.chapters, 1):
         print(f"  {i:3d}. {c.title[:60]:60s} {len(c.text.split()):>7,} words")
     print(f"Cleaned text: {work / 'cleaned.txt'}")
-    rules = load_pronunciations()
+    rules = load_pronunciations(book=args.input.stem)
     lang = args.lang or args.voice.strip()[0]
     if rules:
         hits = sum(len(pat.findall(c.text)) for pat, _, _ in rules for c in book.chapters)
-        print(f"Pronunciations: {len(rules)} rules from {PRONUNCIATIONS.name}, {hits} uses in this book")
+        extra = book_pronunciations_path(args.input.stem)
+        src = f"{PRONUNCIATIONS.name}" + (f" + {extra.relative_to(PROJECT)}" if extra.exists() else "")
+        print(f"Pronunciations: {len(rules)} rules from {src}, {hits} uses in this book")
     if args.list_unknown:
         unknown = list_unknown_words(book, rules, lang)
         (work / "unknown_words.txt").write_text("".join(f"{w}\t{n}\n" for w, n in unknown.most_common()))

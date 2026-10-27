@@ -20,3 +20,7 @@ covers/
 *.jpg
 *.png
 *.log
+
+# Mac app build output
+app/.build/
+app/build/

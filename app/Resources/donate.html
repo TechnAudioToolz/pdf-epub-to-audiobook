@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support Audiobook Maker</title>
+<style>
+  :root { --bg: #faf9f6; --card: #ffffff; --text: #1f1e1c; --muted: #6b6a66; --line: #e4e2dc; --accent: #2b6cb0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1b1a; --card: #252524; --text: #f1efe8; --muted: #a8a69f; --line: #3a3a38; --accent: #7fb2ec; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 48px 20px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 0 0 24px; }
+  .options { display: grid; gap: 14px; margin-bottom: 32px; }
+  .option { display: flex; align-items: center; gap: 14px; padding: 16px 18px; background: var(--card);
+            border: 1px solid var(--line); border-radius: 12px; text-decoration: none; color: var(--text); }
+  .option:hover { border-color: var(--accent); }
+  .logo { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center;
+          font-weight: 700; color: #fff; flex: none; }
+  .venmo { background: #008cff; }
+  .cashapp { background: #00c244; }
+  .name { font-weight: 600; }
+  .handle { color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .go { margin-left: auto; color: var(--accent); white-space: nowrap; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  .credits { font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Thank you for listening</h1>
+  <p>Audiobook Maker is free. It turns books into audiobooks so more people, including readers with dyslexia and
+     anyone learning on the go, can take in knowledge by listening. If it's helped you, a donation keeps it going.</p>
+
+  <div class="options">
+    <a class="option" href="https://venmo.com/u/kevburns">
+      <div class="logo venmo">V</div>
+      <div><div class="name">Venmo</div><div class="handle">@kevburns</div></div>
+      <span class="go">Open Venmo →</span>
+    </a>
+    <a class="option" href="https://cash.app/$kevburnsmusic">
+      <div class="logo cashapp">$</div>
+      <div><div class="name">Cash App</div><div class="handle">$kevburnsmusic</div></div>
+      <span class="go">Open Cash App →</span>
+    </a>
+  </div>
+
+  <h2>Built on the work of others</h2>
+  <p class="credits">The voices come from Kokoro by hexgrad. Audiobook Maker also relies on PyTorch, Whisper,
+     PyMuPDF, EbookLib, spaCy, eSpeak NG and FFmpeg. If you can, please support those projects too.</p>
+</main>
+</body>
+</html>

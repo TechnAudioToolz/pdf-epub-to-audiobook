@@ -149,3 +149,18 @@ Qliphoth = Klip-oth      # or a sound-alike spelling
 ```
 
 `say.py` prints the phonemes it used, so you can copy them into `pronunciations.txt` and adjust. Chapter audio is cached by its exact spoken text, so re-running `audiobook.py` after a change re-renders only the chapters that contain that word.
+
+## Mac app (demo)
+
+A simple window for everything above: drag in books, check chapters, pick a voice, fix words, and render a queue. It needs macOS 13 Ventura or newer on Apple Silicon, and the tools installed with `./setup.sh`.
+
+```bash
+app/build.sh --open      # builds "Audiobook Maker.app" into app/build/ and opens it
+```
+
+- **Add books:** drag PDFs, EPUBs or folders onto the window, or use **Add books**. Each one is checked right away for title, author and chapters.
+- **Book panel:** drop a cover image, edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
+- **Start queue** renders the books one after another with progress. **Stop** keeps finished chapters.
+- **Donate** opens the support page.
+
+The app is a front end only. It runs `audiobook.py` and `say.py` from the project folder it was built in, and its audiobooks go to `output/`. It's signed locally, without a paid Apple Developer account. On another Mac, the first launch is blocked once: open System Settings → Privacy and Security → Open Anyway.

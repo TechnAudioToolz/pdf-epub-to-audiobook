@@ -856,6 +856,9 @@ def convert(path, args):
     cover = args.cover or find_cover(path)
     if cover:
         book.cover = cover.read_bytes()
+    if not book.chapters:
+        raise ValueError("No readable text found. If it's a scanned PDF, run it through OCR first "
+                         "(brew install ocrmypdf && ocrmypdf --skip-text in.pdf out.pdf).")
     out = output_path(args, book, path)
     if out.exists() and not (args.force or args.dry_run or args.list_unknown):
         return "skipped", f"already exists: {out.name} (use --force to redo)"

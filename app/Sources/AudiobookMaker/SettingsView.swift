@@ -15,7 +15,7 @@ struct SettingsView: View {
     }
 }
 
-private struct GeneralSettings: View {
+struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
@@ -57,7 +57,7 @@ private struct GeneralSettings: View {
     }
 }
 
-private struct VoiceSettings: View {
+struct VoiceSettings: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
@@ -103,7 +103,7 @@ private struct VoiceSettings: View {
     }
 }
 
-private struct ToolsSettings: View {
+struct ToolsSettings: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
@@ -145,7 +145,7 @@ private struct ToolsSettings: View {
     }
 }
 
-private struct SupportSettings: View {
+struct SupportSettings: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "heart.circle").font(.system(size: 44)).foregroundColor(.pink)

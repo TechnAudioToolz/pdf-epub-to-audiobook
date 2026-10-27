@@ -160,10 +160,12 @@ struct BookDetail: View {
                             Button { model.listen(item.word, book: book) } label: { Image(systemName: "speaker.wave.2") }
                                 .help("Listen")
                                 .accessibilityLabel("Listen to \(item.word)")
-                            TextField("Say as…", text: Binding(
+                            TextField("", text: Binding(
                                 get: { fixes[item.word, default: ""] },
-                                set: { fixes[item.word] = $0 }))
-                                .frame(width: 120)
+                                set: { fixes[item.word] = $0 }), prompt: Text("Say as…"))
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 140)
                                 .accessibilityLabel("Say \(item.word) as")
                             Button("Save") { model.savePronunciation(word: item.word, sayAs: fixes[item.word, default: ""], book: book) }
                                 .disabled(fixes[item.word, default: ""].isEmpty)

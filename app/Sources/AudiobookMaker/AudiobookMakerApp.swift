@@ -44,6 +44,10 @@ extension AudiobookMakerApp {
     /// Optional launch arguments, for scripting and testing:
     ///   open -a "Audiobook Maker" --args --add book.pdf --add other.epub --start
     func handleLaunchArguments() {
+        if let folder = UserDefaults.standard.string(forKey: "screenshots") {  // README images, see Screenshots.swift
+            Task { await Screenshots.run(model, into: URL(fileURLWithPath: folder)) }
+            return
+        }
         let args = CommandLine.arguments
         let files = zip(args, args.dropFirst()).filter { $0.0 == "--add" }.map { URL(fileURLWithPath: $0.1) }
         if !files.isEmpty { model.add(files) }

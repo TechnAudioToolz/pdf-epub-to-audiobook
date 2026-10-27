@@ -26,7 +26,7 @@ struct SetupView: View {
                 Button("Cancel") { installer.cancel() }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("Downloads the voice engine once: about 1.5 GB", systemImage: "arrow.down.circle")
+                    Label("Downloads the voice engine once: about 1.3 GB", systemImage: "arrow.down.circle")
                     Label("After that everything runs on this Mac, offline", systemImage: "lock.shield")
                     Label("Your books are never uploaded anywhere", systemImage: "book.closed")
                 }

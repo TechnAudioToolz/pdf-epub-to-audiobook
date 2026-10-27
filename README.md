@@ -18,6 +18,16 @@ On an M1 Pro it runs at about **5.5× realtime** on CPU, so a 6.6-hour book take
 
 Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fix any mispronounced words, and render a queue of audiobooks with chapters and covers. Everything below is the command-line version of the same tools.
 
+![Audiobook Maker: a queue of books on the left, the selected book's cover, voice and chapters on the right](docs/screenshots/main-light.png)
+
+| | |
+|---|---|
+| ![Dark mode](docs/screenshots/main-dark.png) **Dark mode** | ![First launch: setup downloads the voice engine once](docs/screenshots/first-launch.png) **First launch:** a one-time setup |
+| ![Book panel: cover, voice, chapters and words to check](docs/screenshots/book-panel.png) **Book panel:** chapters and words to check | ![Voice settings](docs/screenshots/settings-voice.png) **Settings:** voice, speed and pronunciation lists |
+| ![General settings](docs/screenshots/settings-general.png) **Settings:** where audiobooks are saved | ![About window with credits](docs/screenshots/about.png) **About:** credits for every project it builds on |
+
+*Screenshots use public-domain books with generated covers. They're made by the app itself: `open "app/build/Audiobook Maker.app" --args -screenshots docs/screenshots`.*
+
 ## Install the command-line tools (macOS, Apple Silicon)
 
 ```bash

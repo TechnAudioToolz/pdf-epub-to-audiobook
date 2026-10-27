@@ -207,15 +207,22 @@ def title_and_author(title, author, path):
     "Microsoft Word - draft.doc"); then the file name, read as "Author - Title" when it has that shape."""
     def useful(v):
         v = re.sub(r"\s+", " ", v or "").strip()
-        junk = re.match(r"(?i)^(untitled|unknown|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|.*\.(docx?|pdf|indd|rtf))$", v)
+        junk = re.match(r"(?i)^(untitled|unknown|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|"
+                        r"(layout|document|untitled|book|print|pages?|doc)[\s_-]*\d*|.*\.(docx?|pdf|indd|rtf|qxd|p65))$", v)
         return v if len(re.findall(r"[^\W\d_]", v)) >= 3 and not junk else ""
 
     title, author = useful(title), useful(author)
     if not title:
         stem = re.sub(r"[_]+", " ", path.stem).strip()
-        name_author, sep, name_title = stem.partition(" - ")
-        title = name_title.strip() if sep else stem
-        author = author or (name_author.strip() if sep else "")
+        left, sep, right = (part.strip() for part in stem.partition(" - "))
+        if not sep:
+            return stem, author
+        # "Author - Title" is usual, but "Title - Author" is common too: the side that looks like a
+        # person's name (2-4 words, no "of", "the", "and"...) is the author.
+        name_like = lambda t: 2 <= len(t.split()) <= 4 and not any(w.lower() in SMALL_WORDS for w in t.split())
+        if name_like(right) and not name_like(left):
+            left, right = right, left
+        title, author = right, author or left
     return title, author
 
 
@@ -403,9 +410,21 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     for pno, lines in enumerate(pages):
         para, last = [], None
         for ln in lines:
-            if is_page_furniture(ln, repeated, academic, body_size, keep):
+            marker = chapter_marker(ln["text"])
+            if marker:
+                ln["text"] = marker  # a plain "CHAPTER 4" line is a heading, never page furniture
+            elif is_page_furniture(ln, repeated, academic, body_size, keep):
                 continue
-            heading = ln["size"] >= body_size * 1.15 or (ln["bold"] and len(ln["text"]) < 80 and ln["block_lines"] <= 2)
+            # the title in capitals right under it: "MY INTRODUCTION TO HUMANITY"
+            # (a long title wraps onto a second line in capitals)
+            caps_title = bool(last and (last.get("marker") or last.get("caps")) and ln["text"].isupper()
+                              and len(ln["text"].split()) <= 12)
+            ln["caps"] = caps_title
+            if caps_title:
+                ln["text"] = tidy_title(ln["text"])
+            heading = (bool(marker) or caps_title or ln["size"] >= body_size * 1.15
+                       or (ln["bold"] and len(ln["text"]) < 80 and ln["block_lines"] <= 2))
+            ln["marker"] = bool(marker)
             new_para = (
                 last is None
                 or heading != last["heading"]
@@ -434,6 +453,37 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     cover, cover_page = pdf_cover(doc)
     note = f"page {cover_page + 1} of the PDF" if cover else ""
     return Book(title, author, finalize(chapters, academic, keep), cover, note)
+
+
+def chapter_marker(text):
+    """A line that is only "CHAPTER 4" (also "CHAPTER4", or an OCR slip like "CHATTER 30") becomes
+    "Chapter 4"; anything else gives None."""
+    import difflib
+
+    m = re.fullmatch(r"\s*([A-Za-z]{5,9})\s*(\d{1,3}|[IVXLCivxlc]{1,7})\s*[.:]?\s*", text)
+    if not m:
+        return None
+    word = m.group(1).lower()
+    if word != "chapter" and difflib.SequenceMatcher(None, word, "chapter").ratio() < 0.8:
+        return None
+    return f"Chapter {m.group(2).upper() if m.group(2).isalpha() else m.group(2)}"
+
+
+SMALL_WORDS = set("a an and as at but by for from in into nor of on or the to with".split())
+
+
+def tidy_title(t):
+    """ "MY INTRODUCTION TO HUMANITY" -> "My Introduction to Humanity" (Roman numerals stay as they are)."""
+    words = re.sub(r"\s+", " ", t).strip().split(" ")
+    out = []
+    for i, w in enumerate(words):
+        if re.fullmatch(r"[IVXLC]+[.:,]?", w):
+            out.append(w)
+        elif i and w.lower() in SMALL_WORDS:
+            out.append(w.lower())
+        else:
+            out.append(w[:1].upper() + w[1:].lower())
+    return " ".join(out)
 
 
 def is_page_furniture(ln, repeated, academic, body_size, keep=frozenset()):
@@ -582,13 +632,17 @@ def split_pdf_by_headings(stream, pages, body_size):
     # Books with explicit "Chapter N" headings: only those (and front/back-matter headings) start a
     # chapter, so subheadings stay inside their chapter instead of becoming dozens of tiny ones.
     major_only = sum(1 for t in heads if re.match(r"^\s*chapter\s+[\divxlc]+\b", t, re.I)) >= 3
-    chapters, cur = [], Chapter("Opening")
+    chapters, cur, part = [], Chapter("Opening"), None
     for _, kind, txt in stream:
         is_head = kind == "h" and len(txt) < 120 and heads[txt] < 3 and not is_noise_line(txt)
+        m = re.match(r"(?i)^\s*part\s+([\divxlc]+)\b", txt) if is_head else None
+        if m:  # chapter numbers often restart in each part: "Part II, Chapter 1"
+            part = f"Part {m.group(1).upper() if m.group(1).isalpha() else m.group(1)}"
+            txt = tidy_title(txt) if txt.isupper() else txt
         if is_head and major_only and not MAJOR_HEADING.match(txt):
             # "CHAPTER 1" on one line and "The Problem" on the next: join them into one title
             # (and a title that wraps onto a second heading line: "Ghosts and" + "Poltergeists")
-            m = re.fullmatch(r"\s*(chapter|section|part)\s+[\divxlc]+(:.*)?\s*", cur.title, re.I | re.S)
+            m = re.fullmatch(r"\s*(?:part\s+[\divxlc]+,\s*)?(chapter|section|part)\s+[\divxlc]+(:.*)?\s*", cur.title, re.I | re.S)
             if not cur.paragraphs and m:
                 sep = " " if m.group(2) else ": "
                 cur.title = f"{cur.title.strip()}{sep}{txt.replace(chr(10), ' ').strip()}"
@@ -597,6 +651,8 @@ def split_pdf_by_headings(stream, pages, body_size):
         if is_head:
             # "Chapter 2" and its title in one block: "Chapter 2: The Greeters"
             title = re.sub(r"^(\s*(?:chapter|section|part)\s+[\divxlc]+)\s*\n", r"\1: ", txt, flags=re.I).replace("\n", " ")
+            if part and re.match(r"(?i)^\s*chapter\b", title):
+                title = f"{part}, {title.strip()}"
             if cur.paragraphs:
                 chapters.append(cur)
                 cur = Chapter(title)
@@ -975,6 +1031,8 @@ def speak_roman_numerals(text):
 
 def spoken_chapter(ch, rules):
     title = re.sub(r"^\s*([\d.]+|\d+:|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "01: Coaching", "IV. Hod" -> title only
+    if title in ("Opening", "Front matter"):
+        title = ""  # our own label for text before the first heading, not something the book says
     return (speak_roman_numerals(apply_pronunciations(title, rules)),
             [speak_roman_numerals(apply_pronunciations(p, rules)) for p in ch.paragraphs])
 
@@ -1080,7 +1138,7 @@ def made_with(voice, speed):
             f"(free and open source): {GITHUB}")
 
 
-def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules, comment=""):
+def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules, comment="", chapters=True):
     wavs = [(i, chapter_wav(work, i, ch, rules)) for i, ch in enumerate(book.chapters, 1) if not only or i in only]
     wavs = [(i, w) for i, w in wavs if w.exists()]
     if not wavs:
@@ -1095,8 +1153,9 @@ def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | Non
     t = 0
     for i, w in wavs:
         d = int(wav_duration(w) * 1000)
-        meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={t}", f"END={t + d}",
-                 f"title={esc(book.chapters[i - 1].title)}"]
+        if chapters:
+            meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={t}", f"END={t + d}",
+                     f"title={esc(book.chapters[i - 1].title)}"]
         t += d
     (work / "chapters.txt").write_text("\n".join(meta) + "\n")
 
@@ -1116,15 +1175,18 @@ def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | Non
     # Run inside the work dir with relative names: ffmpeg misparses absolute paths containing "#".
     subprocess.run(cmd, check=True, cwd=work)
     hrs = t / 3_600_000
-    print(f"\nWrote {out}  ({hrs:.1f} h, {len(wavs)} chapters, {out.stat().st_size/1e6:.0f} MB)")
+    parts = f"{len(wavs)} chapters" if chapters else "one file, no chapter markers"
+    print(f"\nWrote {out}  ({hrs:.1f} h, {parts}, {out.stat().st_size/1e6:.0f} MB)")
 
 
-def package_mp3(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules, comment=""):
+def package_mp3(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules, comment="", chapters=True):
     """One MP3 per chapter in the folder `out`, numbered so players keep them in order, with tags and cover."""
     wavs = [(i, chapter_wav(work, i, ch, rules)) for i, ch in enumerate(book.chapters, 1) if not only or i in only]
     wavs = [(i, w) for i, w in wavs if w.exists()]
     if not wavs:
         sys.exit("No audio was generated.")
+    if not chapters:
+        return package_one_mp3(book, work, out.with_suffix(".mp3"), bitrate, wavs, comment)
     partial = out.with_name(out.name + ".partial")  # an interrupted run never looks finished
     partial.mkdir(parents=True, exist_ok=True)
     cover = work / "cover.jpg"
@@ -1157,6 +1219,25 @@ def package_mp3(book: Book, work: Path, out: Path, bitrate: str, only: set | Non
     partial.rename(out)
     size = sum(f.stat().st_size for f in out.iterdir())
     print(f"\nWrote {out}  ({seconds / 3600:.1f} h, {len(wavs)} chapters as MP3 files, {size/1e6:.0f} MB)")
+
+
+def package_one_mp3(book, work, out, bitrate, wavs, comment):
+    """The whole book as a single MP3."""
+    (work / "concat.txt").write_text("".join(f"file '{w.name}'\n" for _, w in wavs))
+    cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-stats", "-f", "concat", "-safe", "0", "-i", "concat.txt"]
+    if book.cover:
+        (work / "cover.jpg").write_bytes(book.cover)
+        cmd += ["-i", "cover.jpg", "-map", "0:a", "-map", "1:v", "-c:v", "mjpeg",
+                "-disposition:v", "attached_pic", "-metadata:s:v", "comment=Cover (front)"]
+    else:
+        cmd += ["-map", "0:a"]
+    for k, v in {"title": book.title, "artist": book.author, "album_artist": book.author, "album": book.title,
+                 "genre": "Audiobook", "comment": comment, "encoded_by": "Audiobook Maker"}.items():
+        cmd += ["-metadata", f"{k}={v}"]
+    cmd += ["-c:a", "libmp3lame", "-b:a", bitrate, "-ac", "1", "-id3v2_version", "3", str(out)]
+    subprocess.run(cmd, check=True, cwd=work)
+    hrs = sum(wav_duration(w) for _, w in wavs) / 3600
+    print(f"\nWrote {out}  ({hrs:.1f} h, one file, no chapter markers, {out.stat().st_size/1e6:.0f} MB)")
 
 
 # --------------------------------------------------------------------------- CLI
@@ -1213,7 +1294,8 @@ def output_path(args, book, path):
     if args.chapters:
         out = out.with_name(out.stem + ".preview.m4b")
     if args.format == "mp3":
-        out = out.with_suffix("")  # a folder of MP3s, one per chapter
+        # a folder of MP3s, one per chapter; or one .mp3 for the whole book
+        out = out.with_suffix(".mp3") if args.no_chapters else out.with_suffix("")
     return out
 
 
@@ -1335,7 +1417,7 @@ def convert(path, args):
     synthesize(book, audio, args.voice, args.speed, lang, only, rules, args.verbose)
     out.parent.mkdir(parents=True, exist_ok=True)
     package = package_mp3 if args.format == "mp3" else package_m4b
-    package(book, audio, out, args.bitrate, only, rules, made_with(args.voice, args.speed))
+    package(book, audio, out, args.bitrate, only, rules, made_with(args.voice, args.speed), chapters=not args.no_chapters)
     return "done", out.name
 
 
@@ -1367,6 +1449,8 @@ def main():
     ap.add_argument("--author", help="override author (single book only)")
     ap.add_argument("--format", choices=["m4b", "mp3"], default="m4b",
                     help="m4b: one audiobook file with chapters (default); mp3: a folder with one MP3 per chapter")
+    ap.add_argument("--no-chapters", action="store_true",
+                    help="one continuous file without chapter markers (M4B), or a single MP3 instead of one per chapter")
     ap.add_argument("--bitrate", default="64k", help="audio bitrate (64k is plenty for mono speech)")
     ap.add_argument("--keep", metavar="LIST",
                     help="also read things the cleanup skips, comma-separated: " + ", ".join(KEEP_CHOICES)

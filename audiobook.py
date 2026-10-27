@@ -676,9 +676,77 @@ def apply_pronunciations(text, rules):
     return text
 
 
+ROMAN = re.compile(r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$")
+# Words that take a plain number after them: "Part III" is said "Part three"
+NUMBERED_BY = (r"(?i:chapter|part|section|book|volume|vol\.|phase|stage|act|scene|article|appendix|plate|lesson|"
+               r"lecture|canto|psalm|level|class|grade|type|step|degree|war|exercise|rule|law|principle|"
+               r"category|schedule|tier|division|unit|module|issue|exhibit|table|figure|fig\.|diagram|chart|form)")
+# Rulers and popes take an ordinal: "Henry VIII" -> "Henry the Eighth". Any other name or term takes a
+# plain number: Bateson's "Learning IV" -> "Learning four", "Consciousness III" -> "Consciousness three".
+REGNAL_NAMES = set("""Henry Louis Charles George Edward Elizabeth James William Richard John Paul Pius Leo Gregory
+    Innocent Benedict Clement Philip Philippe Frederick Alexander Peter Catherine Napoleon Ramesses Rameses Ramses
+    Thutmose Amenhotep Ptolemy Seti Mary Anne Victoria Alfonso Ferdinand Constantine Nicholas Ivan Otto Gustav
+    Gustavus Carlos Juan Pedro Henri Urban Boniface Sixtus Julius Felix Martin Eugene Eugenius Stephen Adrian
+    Hadrian Celestine Honorius Nicolas Wilhelm Friedrich Karl Ludwig Francis Franz Leopold Rudolf Harold Malcolm
+    David Robert Alfred Edmund Canute Cnut Olaf Haakon Christian Sancho Manuel Joseph Jose Isabella Isabel
+    Margaret Matilda Darius Cyrus Xerxes Artaxerxes Antiochus Seleucus Herod Amenemhat Senusret Sesostris""".split())
+
+
+def roman_value(s):
+    s = s.upper()
+    if not s or not ROMAN.match(s):
+        return None
+    values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    total = 0
+    for a, b in zip(s, s[1:] + " "):
+        total += -values[a] if b in values and values[b] > values[a] else values[a]
+    return total
+
+
+def speak_roman_numerals(text):
+    """Kokoro reads Roman numerals as letters ("III" as "eye-eye-eye"). Say them as a narrator would:
+    a numbered paragraph "III. The ..." -> "Three. The ...", "Part III" -> "Part three",
+    "(iii)" -> "three", "Henry VIII" -> "Henry the Eighth". A lone "I" only counts as a number when it
+    opens a numbered paragraph, and names only take numerals made of I, V and X ("DC" is left alone)."""
+    from num2words import num2words
+
+    # numbered paragraphs use I, V and X only, so lettered lists ("c. ...") stay letters
+    m = re.match(r"^\(?([IVXivx]{1,6})[.)]\s+(?=[A-Z\u201c\"'])", text)
+    if m and (n := roman_value(m.group(1))):
+        text = num2words(n).capitalize() + ". " + text[m.end():]
+
+    def by_keyword(m):
+        numeral, after = m.group(2), text[m.end():m.end() + 4]
+        if len(numeral) == 1 and numeral not in "IVX":
+            return m.group(0)  # "Appendix C" is a letter
+        if numeral == "I" and not re.match(r"\s*([^\w\s]|of\b|$)", after):
+            return m.group(0)  # "a book I read": the pronoun
+        n = roman_value(numeral)
+        return f"{m.group(1)} {num2words(n)}" if n else m.group(0)
+
+    text = re.sub(rf"\b({NUMBERED_BY})\s+([IVXLC]{{1,7}})\b(?![\w'])", by_keyword, text)
+
+    def in_parens(m):
+        n = roman_value(m.group(1))
+        return num2words(n) if n else m.group(0)
+
+    text = re.sub(r"\(([ivx]{1,5}|[IVX]{1,5})\)", in_parens, text)
+
+    def regnal(m):
+        n = roman_value(m.group(2))
+        if not n:
+            return m.group(0)
+        if m.group(1) in REGNAL_NAMES:
+            return f"{m.group(1)} the {num2words(n, to='ordinal').capitalize()}"
+        return f"{m.group(1)} {num2words(n)}"
+
+    return re.sub(r"\b([A-Z][a-z]+)\s+([IVX]{2,6})\b(?![\w'])", regnal, text)
+
+
 def spoken_chapter(ch, rules):
     title = re.sub(r"^\s*([\d.]+|\d+:|[IVXLC]+\.)\s+", "", ch.title)  # "2.1 Methods", "01: Coaching", "IV. Hod" -> title only
-    return apply_pronunciations(title, rules), [apply_pronunciations(p, rules) for p in ch.paragraphs]
+    return (speak_roman_numerals(apply_pronunciations(title, rules)),
+            [speak_roman_numerals(apply_pronunciations(p, rules)) for p in ch.paragraphs])
 
 
 def chapter_wav(work, i, ch, rules):

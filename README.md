@@ -88,7 +88,8 @@ nohup caffeinate -i .venv/bin/python audiobook.py "/path/to/My Books/" --name-fr
 | `--cover` | Cover image (single book only; queues find covers automatically) |
 | `--title`, `--author`, `-o` | Override bad metadata or the output path (single book only) |
 | `--list-unknown` | List the words Kokoro has to guess, then stop |
-| `--read-all` | Read everything on the page: page numbers, running headers, footnotes, tables, references, index and copyright pages (the default skips them) |
+| `--keep LIST` | Also read things the cleanup skips, comma-separated: `page-numbers`, `headers`, `footnotes`, `tables`, `captions`, `citations`, `links`, `extras` (copyright, contents, references, index, about the author). In the app these are the **Also read** checkboxes |
+| `--read-all` | Read everything on the page (all of `--keep`) |
 | `--format mp3` | A folder with one numbered MP3 per chapter (tagged, with cover) instead of one M4B |
 | `--bitrate` | Audio bitrate, default `64k` (mono speech) |
 
@@ -185,11 +186,12 @@ app/make_dmg.sh          # packages it as app/build/Audiobook Maker.dmg (drag-to
 
 - **Add books:** drag PDFs, EPUBs or folders onto the window, or use **Add books**. Each one is checked right away for title, author and chapters.
 - **Book panel:** drop a cover image, edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
-- **Start queue** renders the books one after another with progress. **Stop** keeps finished chapters.
+- **Start queue** renders the books one after another with progress. **Pause** (⌘P) freezes the render, using no CPU, until **Resume**. **Stop** keeps finished chapters.
+- **Log** (⌘L) shows what the engine is doing: each chapter, and each paragraph as it's read (`--verbose` on the command line).
 - **Donate** opens the support page.
-- **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, what to read (the book, or everything on the page), M4B or one MP3 per chapter, default voice and speed, pronunciation lists, and the tools folder.
+- **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, what else to read (page numbers, headers, footnotes and so on), M4B or one MP3 per chapter, default voice and speed, pronunciation lists, and the tools folder.
 
-**On a Mac without this project folder**, the app sets itself up on first launch: it downloads its own Python, the libraries, ffmpeg and the voice model into `~/Library/Application Support/Audiobook Maker/` (about 1.3 GB, one time, no Homebrew needed), and saves audiobooks to `~/Audiobooks`. After that it runs offline. The same installer can be run by hand: `UV=uv ./install_engine.sh <folder>`.
+**On a Mac without this project folder**, the app sets itself up on first launch: it downloads its own Python, the libraries, ffmpeg and the voice model into `~/Library/Application Support/Audiobook Maker/` (about 1.3 GB, one time, no Homebrew needed), and saves audiobooks to `~/Audiobooks`. After that it runs offline: the app runs the engine with networking switched off (macOS `sandbox-exec`), so no library it uses can reach the internet. One of them, Microsoft's onnxruntime (loaded by PyMuPDF), would otherwise report usage to Microsoft; the command-line tools switch that reporting off too. The same installer can be run by hand: `UV=uv ./install_engine.sh <folder>`.
 
 **Offline edition:** `cd app && ./build.sh && ./make_offline_dmg.sh` builds `build/Audiobook Maker (offline).dmg`, with everything first-launch setup would download stored inside the app (`Contents/Resources/offline`: Python, the libraries as wheels, and the Kokoro model with the English voices). When the installer finds that folder it copies from it instead of downloading. The downloaded parts are kept in `app/build/offline-payload`, so later builds take about a minute.
 

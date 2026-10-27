@@ -48,7 +48,8 @@ struct AboutView: View {
         VStack(alignment: .leading, spacing: 14) {
             if showsHeader {
                 HStack(spacing: 14) {
-                    Image(systemName: "waveform.circle.fill").font(.system(size: 48)).foregroundColor(.accentColor)
+                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Audiobook Maker").font(.title2)
                         Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")")

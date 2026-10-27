@@ -19,6 +19,11 @@ struct AudiobookMakerApp: App {
                 Button("Support this project…") { openDonatePage() }
             }
         }
+
+        Settings {
+            SettingsView()
+                .environmentObject(model)
+        }
     }
 }
 
@@ -36,6 +41,11 @@ extension AudiobookMakerApp {
     }
 }
 
+/// Opens the standard Settings window (the same as ⌘,).
+func openSettings() {
+    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+}
+
 /// The donation page ships inside the app and opens in the default browser.
 func openDonatePage() {
     if let page = Bundle.main.url(forResource: "donate", withExtension: "html") {
@@ -45,8 +55,6 @@ func openDonatePage() {
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
-    @State private var importing = false
-    @State private var choosingEngine = false
     @State private var dropTargeted = false
 
     var body: some View {
@@ -64,7 +72,7 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItemGroup {
-                Button { importing = true } label: { Label("Add books", systemImage: "plus") }
+                Button { model.add(chooseBooks()) } label: { Label("Add books", systemImage: "plus") }
                     .help("Add PDF, EPUB or TXT files, or a folder of them")
                 if model.isRunning {
                     Button { model.stop() } label: { Label("Stop", systemImage: "stop.fill") }
@@ -73,22 +81,16 @@ struct ContentView: View {
                         .disabled(model.books.isEmpty || model.engine == nil)
                 }
                 Button {
-                    if let folder = model.engine?.outputFolder {
+                    if let folder = model.outputFolder {
                         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                         NSWorkspace.shared.open(folder)
                     }
                 } label: { Label("Output folder", systemImage: "folder") }
+                Button { openSettings() } label: { Label("Settings", systemImage: "gearshape") }
+                    .help("Settings (⌘,)")
                 Button { openDonatePage() } label: { Label("Donate", systemImage: "heart") }
                     .help("Support this project")
             }
-        }
-        .fileImporter(isPresented: $importing,
-                      allowedContentTypes: [.pdf, .plainText, .folder, UTType(filenameExtension: "epub") ?? .data],
-                      allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { model.add(urls) }
-        }
-        .fileImporter(isPresented: $choosingEngine, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result { model.chooseEngineFolder(url) }
         }
     }
 
@@ -99,7 +101,7 @@ struct ContentView: View {
                  ? "Can't find the audiobook tools. Choose the project folder that contains audiobook.py."
                  : "The tools aren't installed yet. Run ./setup.sh in the project folder first.")
             Spacer()
-            Button("Choose folder…") { choosingEngine = true }
+            Button("Choose folder…") { if let url = chooseFolder("Choose the folder that contains audiobook.py") { model.chooseEngineFolder(url) } }
         }
         .padding(10)
         .background(Color.yellow.opacity(0.2))
@@ -112,7 +114,7 @@ struct ContentView: View {
                     Image(systemName: "books.vertical").font(.system(size: 36)).foregroundColor(.secondary)
                     Text("Drop books here").font(.title3)
                     Text("PDF, EPUB or TXT files, or a folder of them").foregroundColor(.secondary)
-                    Button("Add books…") { importing = true }
+                    Button("Add books…") { model.add(chooseBooks()) }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -151,8 +153,8 @@ struct ContentView: View {
         HStack {
             Text(model.lastMessage.isEmpty ? model.statusLine : model.lastMessage)
             Spacer()
-            if let engine = model.engine {
-                Text("Output: \(engine.outputFolder.path)").lineLimit(1).truncationMode(.head)
+            if let folder = model.outputFolder {
+                Text("Output: \(folder.path)").lineLimit(1).truncationMode(.head)
             }
         }
         .font(.caption)
@@ -161,6 +163,32 @@ struct ContentView: View {
         .padding(.vertical, 6)
         .background(Color(nsColor: .windowBackgroundColor))
     }
+}
+
+/// Standard macOS open panel; files and folders can be picked together.
+@MainActor
+func chooseBooks() -> [URL] {
+    let panel = NSOpenPanel()
+    panel.title = "Add books"
+    panel.prompt = "Add"
+    panel.message = "Choose PDF, EPUB or TXT files, or a folder of them"
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = true
+    panel.allowsMultipleSelection = true
+    panel.allowedContentTypes = [.pdf, .plainText, UTType(filenameExtension: "epub") ?? .data, .folder]
+    return panel.runModal() == .OK ? panel.urls : []
+}
+
+@MainActor
+func chooseFolder(_ message: String) -> URL? {
+    let panel = NSOpenPanel()
+    panel.message = message
+    panel.prompt = "Choose"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    return panel.runModal() == .OK ? panel.url : nil
 }
 
 /// Turns dropped Finder items into file URLs.

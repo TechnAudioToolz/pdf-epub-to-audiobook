@@ -63,7 +63,19 @@ final class AppModel: ObservableObject {
     @Published var voice = UserDefaults.standard.string(forKey: "voice") ?? "af_alloy" {
         didSet { UserDefaults.standard.set(voice, forKey: "voice") }
     }
-    @Published var speed = 1.0
+    @Published var speed = UserDefaults.standard.object(forKey: "speed") as? Double ?? 1.0 {
+        didSet { UserDefaults.standard.set(speed, forKey: "speed") }
+    }
+    /// Empty means the project's output/ folder.
+    @Published var outputPath = UserDefaults.standard.string(forKey: "outputPath") ?? "" {
+        didSet { UserDefaults.standard.set(outputPath, forKey: "outputPath") }
+    }
+    @Published var nameFromFile = UserDefaults.standard.object(forKey: "nameFromFile") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(nameFromFile, forKey: "nameFromFile") }
+    }
+    @Published var notifyWhenDone = UserDefaults.standard.object(forKey: "notifyWhenDone") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(notifyWhenDone, forKey: "notifyWhenDone") }
+    }
     @Published var isRunning = false
     @Published var engine = Engine.locate()
     @Published var lastMessage = ""
@@ -72,6 +84,10 @@ final class AppModel: ObservableObject {
     private var stopRequested = false
 
     var selectedBook: Book? { books.first { $0.id == selection } }
+
+    var outputFolder: URL? {
+        outputPath.isEmpty ? engine?.outputFolder : URL(fileURLWithPath: outputPath)
+    }
 
     // MARK: adding books
 
@@ -132,7 +148,10 @@ final class AppModel: ObservableObject {
     // MARK: talking to the engine
 
     private func commonArgs(_ book: Book) -> [String] {
-        var args = [book.url.path, "--name-from-file", "--voice", voice, "--speed", String(format: "%.2f", speed)]
+        var args = [book.url.path, "--voice", voice, "--speed", String(format: "%.2f", speed)]
+        if nameFromFile { args.append("--name-from-file") }
+        if !notifyWhenDone { args.append("--no-notify") }
+        if !outputPath.isEmpty { args += ["--output-dir", outputPath] }
         if !book.title.isEmpty { args += ["--title", book.title] }
         if !book.author.isEmpty { args += ["--author", book.author] }
         if let cover = book.coverURL { args += ["--cover", cover.path] }

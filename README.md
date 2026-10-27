@@ -162,5 +162,6 @@ app/build.sh --open      # builds "Audiobook Maker.app" into app/build/ and open
 - **Book panel:** drop a cover image, edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
 - **Start queue** renders the books one after another with progress. **Stop** keeps finished chapters.
 - **Donate** opens the support page.
+- **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, default voice and speed, pronunciation lists, and the tools folder.
 
 The app is a front end only. It runs `audiobook.py` and `say.py` from the project folder it was built in, and its audiobooks go to `output/`. It's signed locally, without a paid Apple Developer account. On another Mac, the first launch is blocked once: open System Settings → Privacy and Security → Open Anyway.

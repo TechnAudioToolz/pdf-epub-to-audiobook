@@ -814,7 +814,8 @@ def output_path(args, book, path):
         out = args.output
     else:
         name = path.stem if args.name_from_file else (f"{book.author} - {book.title}" if book.author else book.title)
-        out = PROJECT / "output" / (re.sub(r'[/:\\*?"<>|]+', "", name).strip() + ".m4b")
+        folder = args.output_dir or PROJECT / "output"
+        out = folder / (re.sub(r'[/:\\*?"<>|]+', "", name).strip() + ".m4b")
     out = out.resolve()  # ffmpeg runs inside the work dir, so a relative -o would land there
     if args.chapters:
         out = out.with_name(out.stem + ".preview.m4b")
@@ -908,6 +909,7 @@ def main():
     ap.add_argument("inputs", nargs="+", type=Path, help="PDF, EPUB or TXT files, and/or folders of them")
     ap.add_argument("-o", "--output", type=Path,
                     help="output .m4b, single book only (default: output/<Author> - <Title>.m4b in the project)")
+    ap.add_argument("--output-dir", type=Path, help="folder for finished audiobooks (default: output/ in the project)")
     ap.add_argument("--name-from-file", action="store_true",
                     help="name each output after its input file (output/<file name>.m4b)")
     ap.add_argument("--force", action="store_true", help="redo books whose output already exists")

@@ -1,4 +1,4 @@
-# PDF / EPUB → Audiobook (local, offline m4b)
+# PDF / EPUB → Audiobook (local, offline)
 
 Converts a PDF, EPUB or TXT into a chaptered `.m4b` audiobook using [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) TTS on your Mac.
 Nothing leaves the machine after the one-time model download (~330 MB).

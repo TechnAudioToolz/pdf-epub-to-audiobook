@@ -41,9 +41,20 @@ extension AudiobookMakerApp {
     }
 }
 
-/// Opens the standard Settings window (the same as ⌘,).
-func openSettings() {
-    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+/// Opens the standard Settings window (the same as ⌘,). macOS 14+ only allows SettingsLink;
+/// macOS 13 needs the older menu action.
+struct SettingsButton: View {
+    var body: some View {
+        if #available(macOS 14.0, *) {
+            SettingsLink { Label("Settings", systemImage: "gearshape") }
+                .help("Settings (⌘,)")
+        } else {
+            Button {
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            } label: { Label("Settings", systemImage: "gearshape") }
+                .help("Settings (⌘,)")
+        }
+    }
 }
 
 /// The donation page ships inside the app and opens in the default browser.
@@ -86,8 +97,7 @@ struct ContentView: View {
                         NSWorkspace.shared.open(folder)
                     }
                 } label: { Label("Output folder", systemImage: "folder") }
-                Button { openSettings() } label: { Label("Settings", systemImage: "gearshape") }
-                    .help("Settings (⌘,)")
+                SettingsButton()
                 Button { openDonatePage() } label: { Label("Donate", systemImage: "heart") }
                     .help("Support this project")
             }

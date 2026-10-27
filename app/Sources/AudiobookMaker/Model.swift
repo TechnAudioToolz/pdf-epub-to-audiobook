@@ -79,6 +79,17 @@ final class AppModel: ObservableObject {
     @Published var notifyWhenDone = UserDefaults.standard.object(forKey: "notifyWhenDone") as? Bool ?? true {
         didSet { UserDefaults.standard.set(notifyWhenDone, forKey: "notifyWhenDone") }
     }
+    /// false: skip page numbers, running headers, footnotes, references and the like (audiobook.py's default).
+    @Published var readAll = UserDefaults.standard.bool(forKey: "readAll") {
+        didSet {
+            UserDefaults.standard.set(readAll, forKey: "readAll")
+            for book in books where book.state != .rendering { check(book) }  // chapter list changes
+        }
+    }
+    /// "m4b" (one file with chapters) or "mp3" (a folder with one file per chapter).
+    @Published var outputFormat = UserDefaults.standard.string(forKey: "outputFormat") ?? "m4b" {
+        didSet { UserDefaults.standard.set(outputFormat, forKey: "outputFormat") }
+    }
     @Published var isRunning = false
     @Published var engine = Engine.locate()
     @Published var lastMessage = ""
@@ -160,6 +171,8 @@ final class AppModel: ObservableObject {
     private func commonArgs(_ book: Book) -> [String] {
         var args = [book.url.path, "--voice", voice, "--speed", String(format: "%.2f", speed)]
         if nameFromFile { args.append("--name-from-file") }
+        if readAll { args.append("--read-all") }
+        args += ["--format", outputFormat]
         if !notifyWhenDone { args.append("--no-notify") }
         if !outputPath.isEmpty || engine?.isAppInstall == true, let folder = outputFolder {
             args += ["--output-dir", folder.path]

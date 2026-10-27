@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Screenshot mode for the README: fills the app with public-domain demo books and draws each screen
+/// Screenshot mode for the README: fills the app with demo books and draws each screen
 /// into a PNG. It renders the app's own windows, so no screen recording permission is needed.
 ///   open "Audiobook Maker.app" --args -screenshots /path/to/folder
 @MainActor
@@ -67,17 +67,17 @@ enum Screenshots {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
-    // MARK: demo content (public-domain books, generated covers)
+    // MARK: demo content (generated covers)
 
     private static func loadDemo(_ model: AppModel) {
         let demo: [(String, String, NSColor, BookState, Double, String)] = [
-            ("The Kybalion", "Three Initiates", NSColor(calibratedRed: 0.42, green: 0.27, blue: 0.62, alpha: 1),
-             .rendering, 0.44, "Chapter 7 of 16: The Divine Paradox · about 21 min left"),
-            ("Meditations", "Marcus Aurelius", NSColor(calibratedRed: 0.62, green: 0.36, blue: 0.20, alpha: 1),
-             .done, 1, "Meditations.m4b"),
-            ("The Science of Getting Rich", "Wallace D. Wattles", NSColor(calibratedRed: 0.13, green: 0.47, blue: 0.38, alpha: 1),
+            ("The Holographic Universe", "Michael Talbot", NSColor(calibratedRed: 0.20, green: 0.32, blue: 0.55, alpha: 1),
+             .rendering, 0.38, "Chapter 4 of 10: I Sing the Body Holographic · about 48 min left"),
+            ("Between Death and Life", "Dolores Cannon", NSColor(calibratedRed: 0.42, green: 0.27, blue: 0.62, alpha: 1),
+             .done, 1, "Dolores Cannon - Between Death and Life.m4b"),
+            ("Money and the Law of Attraction", "Esther and Jerry Hicks", NSColor(calibratedRed: 0.13, green: 0.47, blue: 0.38, alpha: 1),
              .ready, 0, ""),
-            ("Pride and Prejudice", "Jane Austen", NSColor(calibratedRed: 0.20, green: 0.32, blue: 0.55, alpha: 1),
+            ("Why You're Dumb, Sick and Broke", "Randy Gage", NSColor(calibratedRed: 0.62, green: 0.36, blue: 0.20, alpha: 1),
              .waiting, 0, ""),
         ]
         model.books = demo.map { title, author, color, state, progress, detail in
@@ -90,16 +90,16 @@ enum Screenshots {
             book.detail = detail
             return book
         }
-        let kybalion = model.books[0]
-        kybalion.summary = "16 chapters, 33,860 words, ~3.6 h of audio"
-        kybalion.coverNote = "Found: The Kybalion.jpg"
-        kybalion.chapters = ["Introduction", "The Hermetic Philosophy", "The Seven Hermetic Principles",
-                             "Mental Transmutation", "The All", "The Mental Universe", "The Divine Paradox",
-                             "The All in All", "Planes of Correspondence", "Vibration", "Polarity", "Rhythm",
-                             "Causation", "Gender", "Mental Gender", "Hermetic Axioms"]
-        kybalion.unknownWords = [WordCount(word: "Kybalion", count: 31), WordCount(word: "Trismegistus", count: 9),
-                                 WordCount(word: "Hermetists", count: 7), WordCount(word: "Thoth", count: 3)]
-        model.selection = kybalion.id
+        let talbot = model.books[0]
+        talbot.summary = "10 chapters, 118,240 words, ~12.7 h of audio"
+        talbot.coverNote = "Found: The Holographic Universe.jpg"
+        talbot.chapters = ["Introduction", "The Brain as Hologram", "The Cosmos as Hologram",
+                           "The Holographic Model and Psychology", "I Sing the Body Holographic",
+                           "A Pocketful of Miracles", "Seeing Holographically", "Time Out of Mind",
+                           "Traveling in the Superhologram", "Return to the Dreamtime"]
+        talbot.unknownWords = [WordCount(word: "Pribram", count: 64), WordCount(word: "superhologram", count: 12),
+                               WordCount(word: "Grof", count: 38), WordCount(word: "Ullman", count: 9)]
+        model.selection = talbot.id
         model.voice = "bm_george"
         model.outputPath = "/Users/you/Audiobooks"  // a neutral path for the status bar
         model.lastMessage = ""

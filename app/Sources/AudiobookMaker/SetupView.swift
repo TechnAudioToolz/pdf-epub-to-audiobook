@@ -9,9 +9,8 @@ struct SetupView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "waveform.circle")
-                .font(.system(size: 56))
-                .foregroundColor(.accentColor)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable().frame(width: 96, height: 96)
                 .accessibilityHidden(true)
             Text("Set up Audiobook Maker").font(.title)
 

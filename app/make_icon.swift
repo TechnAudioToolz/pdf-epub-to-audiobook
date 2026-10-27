@@ -1,34 +1,41 @@
-// Draws the app icon (an open book with a sound wave) and writes Resources/AppIcon.icns.
+// Makes the app icon from Resources/AppIcon-artwork.png and writes Resources/AppIcon.icns.
+// The artwork's rounded square is cut out of its background (which may be solid black, not transparent)
+// and placed on Apple's icon grid, so it sits the same size as other icons in the Dock.
 //   swift make_icon.swift
 import AppKit
+
+let artwork = NSImage(contentsOfFile: "Resources/AppIcon-artwork.png")!
+let art = NSBitmapImageRep(data: artwork.tiffRepresentation!)!
+let w = art.pixelsWide, h = art.pixelsHigh
+
+// Find the rounded square: the first and last non-black pixels along the middle row and column.
+func lit(_ x: Int, _ y: Int) -> Bool { (art.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)?.brightnessComponent ?? 0) > 0.06 }
+let left = (0..<w).first { lit($0, h / 2) }!, right = (0..<w).last { lit($0, h / 2) }!
+let top = (0..<h).first { lit(w / 2, $0) }!, bottom = (0..<h).last { lit(w / 2, $0) }!
+let crop = NSRect(x: left, y: h - 1 - bottom, width: right - left + 1, height: bottom - top + 1)  // AppKit counts from the bottom
 
 let size: CGFloat = 1024
 let image = NSImage(size: NSSize(width: size, height: size))
 image.lockFocus()
-
-// macOS icon grid: an 824-point rounded square centred on the 1024 canvas
+// macOS icon grid: an 824-point rounded square centred on the 1024 canvas, with a soft shadow
 let tile = NSRect(x: 100, y: 100, width: 824, height: 824)
 let shape = NSBezierPath(roundedRect: tile, xRadius: 185, yRadius: 185)
-NSGradient(starting: NSColor(calibratedRed: 0.16, green: 0.38, blue: 0.78, alpha: 1),
-           ending: NSColor(calibratedRed: 0.07, green: 0.18, blue: 0.45, alpha: 1))!
-    .draw(in: shape, angle: -90)
-
-func symbol(_ name: String, pointSize: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSImage {
-    let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-        .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-    return NSImage(systemSymbolName: name, accessibilityDescription: nil)!.withSymbolConfiguration(config)!
-}
-
-func draw(_ img: NSImage, centeredAt center: NSPoint) {
-    let s = img.size
-    img.draw(in: NSRect(x: center.x - s.width / 2, y: center.y - s.height / 2, width: s.width, height: s.height))
-}
-
-draw(symbol("book.fill", pointSize: 330, weight: .regular, color: .white), centeredAt: NSPoint(x: 512, y: 590))
-draw(symbol("waveform", pointSize: 230, weight: .semibold,
-            color: NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.35, alpha: 1)),
-     centeredAt: NSPoint(x: 512, y: 300))
+NSGraphicsContext.saveGraphicsState()
+let shadow = NSShadow()
+shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+shadow.shadowOffset = NSSize(width: 0, height: -10)
+shadow.shadowBlurRadius = 24
+shadow.set()
+NSColor.black.setFill()
+shape.fill()
+NSGraphicsContext.restoreGraphicsState()
+NSGraphicsContext.saveGraphicsState()
+shape.addClip()
+NSImage(cgImage: art.cgImage!, size: NSSize(width: w, height: h))
+    .draw(in: tile, from: crop, operation: .copy, fraction: 1)
+NSGraphicsContext.restoreGraphicsState()
 image.unlockFocus()
+print("Artwork \(w)x\(h), rounded square found at x \(left)-\(right), y \(top)-\(bottom)")
 
 // Write every size iconutil expects, then pack them into an .icns
 let iconset = URL(fileURLWithPath: "build/AppIcon.iconset")

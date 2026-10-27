@@ -7,7 +7,18 @@ Nothing leaves the machine after the one-time model download (~330 MB).
 
 On an M1 Pro it runs at about **5.5× realtime** on CPU, so a 6.6-hour book takes about 72 minutes.
 
-## Install (macOS, Apple Silicon)
+## Download the Mac app
+
+**[Audiobook Maker for Mac: latest release](https://github.com/TechnAudioToolz/pdf-epub-to-audiobook/releases/latest)** (early preview)
+
+- Needs **macOS 13 Ventura or newer** on a Mac with **Apple Silicon** (M1 or later).
+- Open the `.dmg` and drag **Audiobook Maker** to Applications.
+- The app isn't registered with Apple, so the first time macOS blocks it: go to **System Settings → Privacy and Security** and click **Open Anyway**. You only do this once.
+- On first launch it downloads its voice engine (about 1.3 GB, one time). After that it works offline and your books never leave your Mac.
+
+Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fix any mispronounced words, and render a queue of audiobooks with chapters and covers. Everything below is the command-line version of the same tools.
+
+## Install the command-line tools (macOS, Apple Silicon)
 
 ```bash
 git clone https://github.com/TechnAudioToolz/pdf-epub-to-audiobook.git && cd pdf-epub-to-audiobook

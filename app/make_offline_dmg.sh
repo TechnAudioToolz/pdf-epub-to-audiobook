@@ -21,8 +21,9 @@ if [ ! -f "$PAYLOAD/.complete" ]; then
   export UV_CACHE_DIR="$(pwd)/build/offline-uv-cache" UV_NO_PROGRESS=1
   "$UV" python install --no-bin 3.12   # --no-bin: put nothing in ~/.local/bin
   "$UV" venv --quiet --seed --python 3.12 "$ENV"
-  # Every library as a wheel. Anything compiled here must also run on macOS 13.
-  PIP_NO_CACHE_DIR=1 MACOSX_DEPLOYMENT_TARGET=13.0 "$ENV/bin/python" -m pip wheel --quiet -w "$PAYLOAD/wheels" -r ../requirements.txt "$SPACY_MODEL"
+  # Every library as a ready-made wheel for macOS 13 (pip would otherwise pick builds for the Mac it runs on).
+  PIP_NO_CACHE_DIR=1 "$ENV/bin/python" -m pip download --quiet --only-binary=:all: --platform macosx_13_0_arm64 \
+    --python-version 3.12 --implementation cp -d "$PAYLOAD/wheels" -r ../requirements.txt "$SPACY_MODEL"
   # Install from the wheels alone, as the app will, to prove nothing is missing.
   # (from inside the folder: uv reads a "#" in a --find-links path as a URL fragment)
   (cd "$PAYLOAD/wheels" && "$UV" pip install --quiet --python "$ENV/bin/python" --offline --no-index --find-links . \
@@ -43,6 +44,10 @@ EOF
   rm -rf "$PAYLOAD/python/cpython-3.12-macos-aarch64-none" "$PAYLOAD/python/.lock" "$PAYLOAD/python/.temp"
   touch "$PAYLOAD/.complete"
 fi
+
+# Refuse to ship anything that needs a newer macOS than the app supports.
+TOO_NEW="$(ls "$PAYLOAD/wheels" | grep -E 'macosx_(1[4-9]|[2-9][0-9])_' || true)"
+[ -z "$TOO_NEW" ] || { echo "These need macOS 14 or newer:"; echo "$TOO_NEW"; exit 1; }
 
 # The app, with the payload inside it.
 OUT="build/offline"

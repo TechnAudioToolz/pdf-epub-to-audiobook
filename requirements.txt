@@ -1,7 +1,11 @@
 # Python 3.10-3.12 (Kokoro does not support 3.13+ yet)
 kokoro==0.9.4
 misaki[en]==0.9.4
-torch==2.14.1
+# macOS 13 Ventura support: PyTorch 2.12+, onnxruntime 1.24+ and av 16+ only ship builds for macOS 14+.
+# These versions sound and run the same (tested 2026-10-27: identical length, 99% matching audio, same speed).
+torch==2.11.0
+onnxruntime==1.23.2      # pulled in by PyMuPDF (page layout) and faster-whisper
+av==15.1.0               # faster-whisper's audio reader
 pymupdf==2.0
 EbookLib==0.20
 beautifulsoup4==4.15.0

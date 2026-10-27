@@ -29,8 +29,29 @@ git clone https://github.com/TechnAudioToolz/pdf-epub-to-audiobook.git && cd pdf
 
 Everything is written inside this project folder, wherever the input file lives. The input is only read.
 
-- The finished book goes to `output/<Author> - <Title>.m4b`.
-- Working files go to `work/<book>/`: per-chapter WAVs cached per voice, `cleaned.txt` and chapter metadata. Once you're happy with the result, move that folder to the Trash.
+- The finished book goes to `output/<Author> - <Title>.m4b` (or `output/<file name>.m4b` with `--name-from-file`).
+- Working files go to `work/<book>/`: per-chapter WAVs cached per voice, `cleaned.txt`, chapter metadata and `render.log`. Once you're happy with the result, move that folder to the Trash.
+
+## Converting many books (queue)
+
+Give it several files, a whole folder, or both. Books render one after another:
+
+```bash
+.venv/bin/python audiobook.py "/path/to/My Books/" --name-from-file
+.venv/bin/python audiobook.py book1.pdf book2.epub "/path/to/More Books/"
+```
+
+- **Covers are found automatically**, in this order: `covers/<book file name>.jpg|png|webp` in this project, then an image next to the book (`<book>.jpg`, `<book>-Cover.jpg`, `cover.jpg` or `folder.jpg`), then the book's own first page.
+- **Finished books are skipped**, so re-running a folder only converts the new ones. `--force` redoes them. Interrupted books resume from the last finished chapter.
+- **One bad file doesn't stop the queue.** It's marked FAILED in the summary at the end.
+- **A Mac notification** appears as each book finishes (`--no-notify` turns it off).
+- **Watch progress** with `./status.sh`, or `tail -f work/<book>/render.log`.
+
+Long queues can run for hours. To keep one going after you close the terminal, start it detached and keep the Mac awake:
+
+```bash
+nohup caffeinate -i .venv/bin/python audiobook.py "/path/to/My Books/" --name-from-file > queue.log 2>&1 &
+```
 
 ## Options
 
@@ -40,7 +61,11 @@ Everything is written inside this project folder, wherever the input file lives.
 | `--speed` | `0.9` slower, `1.15` faster |
 | `--chapters` | Render only some chapters, e.g. `1-3,7`. Output is `*.preview.m4b` |
 | `--fiction` | Turn off the academic cleanup (citation and abbreviation rewriting, footnote and caption removal) |
-| `--title`, `--author` | Override bad metadata |
+| `--name-from-file` | Name each output after its input file |
+| `--force` | Redo books whose output already exists |
+| `--cover` | Cover image (single book only; queues find covers automatically) |
+| `--title`, `--author`, `-o` | Override bad metadata or the output path (single book only) |
+| `--list-unknown` | List the words Kokoro has to guess, then stop |
 | `--bitrate` | AAC bitrate, default `64k` (mono speech) |
 
 ## What the cleanup does (PDF)

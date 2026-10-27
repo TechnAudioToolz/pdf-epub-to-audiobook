@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Turn a PDF or EPUB into a chaptered M4B audiobook using Kokoro TTS, fully offline.
+"""Turn PDFs, EPUBs or TXT files into chaptered M4B audiobooks using Kokoro TTS, fully offline.
 
-    python audiobook.py book.pdf                      # -> book.m4b
-    python audiobook.py book.epub --voice bm_george   # British male narrator
-    python audiobook.py paper.pdf --dry-run           # inspect chapters + cleaned text, no audio
+    python audiobook.py book.pdf                          # -> output/<Author> - <Title>.m4b
+    python audiobook.py book.epub --voice bm_george       # British male narrator
+    python audiobook.py paper.pdf --dry-run               # inspect chapters + cleaned text, no audio
+    python audiobook.py a.pdf b.epub "My Books/"          # a queue: files and/or whole folders
+    python audiobook.py "My Books/" --name-from-file      # outputs named after each file
 
-Synthesis is resumable: finished chapters are cached in <book>.work/ and skipped on rerun.
+Queues render one book after another, skip books already in output/, keep going if one fails,
+and finish with a summary. Covers are found automatically (see find_cover).
+Synthesis is resumable: finished chapters are cached in work/<book>/ and skipped on rerun.
 """
 import argparse
 import os
@@ -665,12 +669,24 @@ def list_unknown_words(book, rules, lang):
 
 # --------------------------------------------------------------------------- audio
 
+_pipelines = {}
+
+
+def get_pipeline(lang):
+    """Load the voice model once per language and reuse it for every book in a queue."""
+    if lang not in _pipelines:
+        from kokoro import KPipeline
+
+        _pipelines[lang] = KPipeline(lang_code=lang, repo_id="hexgrad/Kokoro-82M", device="cpu")
+    return _pipelines[lang]
+
+
 def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only: set | None, rules):
     import numpy as np
     import soundfile as sf
     from kokoro import KPipeline
 
-    pipe = KPipeline(lang_code=lang, repo_id="hexgrad/Kokoro-82M", device="cpu")
+    pipe = get_pipeline(lang)
     para_gap = np.zeros(int(SAMPLE_RATE * 0.45), dtype=np.float32)
     title_gap = np.zeros(int(SAMPLE_RATE * 1.2), dtype=np.float32)
     total_chars = sum(len(c.text) for i, c in enumerate(book.chapters) if not only or i + 1 in only)
@@ -762,40 +778,90 @@ def parse_range(s):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("input", type=Path, help="PDF, EPUB or TXT file")
-    ap.add_argument("-o", "--output", type=Path, help="output .m4b (default: output/<Author> - <Title>.m4b in the project)")
-    ap.add_argument("--voice", default="af_alloy",
-                    help="Kokoro voice (default af_alloy): af_heart, af_bella, am_michael, bf_emma, bm_george, bm_lewis, ... "
-                         "(blend with 'af_heart,bm_george')")
-    ap.add_argument("--speed", type=float, default=1.0, help="speaking rate, e.g. 0.9 or 1.15")
-    ap.add_argument("--lang", choices=["a", "b"], help="a = American, b = British (default: from voice)")
-    ap.add_argument("--chapters", help="only these chapters, e.g. '1-3,7' (handy for previews)")
-    ap.add_argument("--fiction", action="store_true",
-                    help="skip academic cleanup (citations, abbreviations, footnotes, captions)")
-    ap.add_argument("--cover", type=Path, help="cover image (jpg/png/webp); default: the book's own cover")
-    ap.add_argument("--title", help="override book title")
-    ap.add_argument("--author", help="override author")
-    ap.add_argument("--bitrate", default="64k", help="AAC bitrate (64k is plenty for mono speech)")
-    ap.add_argument("--dry-run", action="store_true", help="list chapters and write cleaned text, no audio")
-    ap.add_argument("--list-unknown", action="store_true",
-                    help="list words Kokoro doesn't know (likely mispronounced), then stop")
-    args = ap.parse_args()
+BOOK_TYPES = (".pdf", ".epub", ".txt")
+IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".webp")
 
-    if not args.input.exists():
-        sys.exit(f"Not found: {args.input}")
-    if not shutil.which("ffmpeg"):
-        sys.exit("ffmpeg is required: brew install ffmpeg")
 
-    book = load_book(args.input, academic=not args.fiction)
+def expand_inputs(paths):
+    """Files as given; folders become every PDF/EPUB/TXT directly inside them, in name order."""
+    books = []
+    for p in paths:
+        if p.is_dir():
+            books += sorted(f for f in p.iterdir() if f.suffix.lower() in BOOK_TYPES and not f.name.startswith("."))
+        elif p.exists():
+            books.append(p)
+        else:
+            print(f"Not found, skipping: {p}")
+    return books
+
+
+def find_cover(book_path):
+    """covers/<book>.*, then an image next to the book (<book>.jpg, <book>-Cover.jpg, cover.jpg, folder.jpg)."""
+    stem = book_path.stem.strip()
+    for ext in IMAGE_TYPES:
+        if (PROJECT / "covers" / f"{stem}{ext}").exists():
+            return PROJECT / "covers" / f"{stem}{ext}"
+    for name in (stem, f"{stem}-Cover", f"{stem} cover", "cover", "folder"):
+        for ext in IMAGE_TYPES:
+            for f in (book_path.with_name(name + ext), book_path.with_name(name + ext.upper())):
+                if f.exists():
+                    return f
+    return None
+
+
+def output_path(args, book, path):
+    if args.output:
+        out = args.output
+    else:
+        name = path.stem if args.name_from_file else (f"{book.author} - {book.title}" if book.author else book.title)
+        out = PROJECT / "output" / (re.sub(r'[/:\\*?"<>|]+', "", name).strip() + ".m4b")
+    out = out.resolve()  # ffmpeg runs inside the work dir, so a relative -o would land there
+    if args.chapters:
+        out = out.with_name(out.stem + ".preview.m4b")
+    return out
+
+
+def notify(title, message):
+    if sys.platform == "darwin":
+        subprocess.run(["osascript", "-e", f"display notification {message!r} with title {title!r}"],
+                       capture_output=True)
+
+
+class Tee:
+    """Mirror everything printed for one book into work/<book>/render.log (for status.sh / tail -f)."""
+
+    def __init__(self, stream, path):
+        self.stream, self.path, self.file = stream, path, None
+
+    def write(self, data):
+        self.stream.write(data)
+        if self.file is None:  # opened on first output, so a skipped book keeps its old log
+            self.file = open(self.path, "w")
+        self.file.write(data)
+        self.file.flush()
+
+    def flush(self):
+        self.stream.flush()
+
+    def close(self):
+        if self.file:
+            self.file.close()
+
+
+def convert(path, args):
+    """Convert one book. Returns (status, detail) where status is done / skipped / checked."""
+    book = load_book(path, academic=not args.fiction)
     book.title = args.title or book.title
     book.author = args.author or book.author
-    if args.cover:
-        book.cover = args.cover.read_bytes()
-    work = PROJECT / "work" / args.input.stem
-    work.mkdir(parents=True, exist_ok=True)
+    cover = args.cover or find_cover(path)
+    if cover:
+        book.cover = cover.read_bytes()
+    out = output_path(args, book, path)
+    if out.exists() and not (args.force or args.dry_run or args.list_unknown):
+        return "skipped", f"already exists: {out.name} (use --force to redo)"
 
+    work = PROJECT / "work" / path.stem
+    work.mkdir(parents=True, exist_ok=True)
     (work / "cleaned.txt").write_text(
         "\n\n".join(f"### {i}. {c.title}\n\n{c.text}" for i, c in enumerate(book.chapters, 1))
     )
@@ -804,12 +870,13 @@ def main():
     print(f"{len(book.chapters)} chapters, {words:,} words, ~{words / 155 / 60 / args.speed:.1f} h of audio")
     for i, c in enumerate(book.chapters, 1):
         print(f"  {i:3d}. {c.title[:60]:60s} {len(c.text.split()):>7,} words")
+    print(f"Cover: {cover.name if cover else ('from the book' if book.cover else 'none')}")
     print(f"Cleaned text: {work / 'cleaned.txt'}")
-    rules = load_pronunciations(book=args.input.stem)
+    rules = load_pronunciations(book=path.stem)
     lang = args.lang or args.voice.strip()[0]
     if rules:
         hits = sum(len(pat.findall(c.text)) for pat, _, _ in rules for c in book.chapters)
-        extra = book_pronunciations_path(args.input.stem)
+        extra = book_pronunciations_path(path.stem)
         src = f"{PRONUNCIATIONS.name}" + (f" + {extra.relative_to(PROJECT)}" if extra.exists() else "")
         print(f"Pronunciations: {len(rules)} rules from {src}, {hits} uses in this book")
     if args.list_unknown:
@@ -819,22 +886,93 @@ def main():
         print("  " + ", ".join(f"{w} ({n})" for w, n in unknown.most_common(60)))
         print(f"Full list: {work / 'unknown_words.txt'}")
         print('Hear one with: .venv/bin/python say.py "word"')
-        return
+        return "checked", f"{len(unknown)} guessed words"
     if args.dry_run:
-        return
+        return "checked", f"{len(book.chapters)} chapters, {words:,} words"
 
     only = parse_range(args.chapters)
     # Cache audio per voice+speed so switching voices never reuses another voice's chapters.
     audio = work / f"audio_{args.voice.replace(',', '+')}_{args.speed:g}"
     audio.mkdir(exist_ok=True)
     synthesize(book, audio, args.voice, args.speed, lang, only, rules)
-    name = f"{book.author} - {book.title}" if book.author else book.title
-    out = args.output or PROJECT / "output" / (re.sub(r'[/:\\*?"<>|]+', "", name).strip() + ".m4b")
-    out = out.resolve()  # ffmpeg runs inside the work dir, so a relative -o would land there
     out.parent.mkdir(parents=True, exist_ok=True)
-    if only:
-        out = out.with_name(out.stem + ".preview.m4b")
     package_m4b(book, audio, out, args.bitrate, only, rules)
+    return "done", out.name
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("inputs", nargs="+", type=Path, help="PDF, EPUB or TXT files, and/or folders of them")
+    ap.add_argument("-o", "--output", type=Path,
+                    help="output .m4b, single book only (default: output/<Author> - <Title>.m4b in the project)")
+    ap.add_argument("--name-from-file", action="store_true",
+                    help="name each output after its input file (output/<file name>.m4b)")
+    ap.add_argument("--force", action="store_true", help="redo books whose output already exists")
+    ap.add_argument("--voice", default="af_alloy",
+                    help="Kokoro voice (default af_alloy): af_heart, af_bella, am_michael, bf_emma, bm_george, bm_lewis, ... "
+                         "(blend with 'af_heart,bm_george')")
+    ap.add_argument("--speed", type=float, default=1.0, help="speaking rate, e.g. 0.9 or 1.15")
+    ap.add_argument("--lang", choices=["a", "b"], help="a = American, b = British (default: from voice)")
+    ap.add_argument("--chapters", help="only these chapters, e.g. '1-3,7' (handy for previews)")
+    ap.add_argument("--fiction", action="store_true",
+                    help="skip academic cleanup (citations, abbreviations, footnotes, captions)")
+    ap.add_argument("--cover", type=Path,
+                    help="cover image, single book only (default: covers/<book>.*, an image next to the book, "
+                         "or the book's own cover)")
+    ap.add_argument("--title", help="override book title (single book only)")
+    ap.add_argument("--author", help="override author (single book only)")
+    ap.add_argument("--bitrate", default="64k", help="AAC bitrate (64k is plenty for mono speech)")
+    ap.add_argument("--dry-run", action="store_true", help="list chapters and write cleaned text, no audio")
+    ap.add_argument("--list-unknown", action="store_true",
+                    help="list words Kokoro doesn't know (likely mispronounced), then stop")
+    ap.add_argument("--no-notify", action="store_true", help="no Mac notification when each book finishes")
+    args = ap.parse_args()
+
+    if not shutil.which("ffmpeg"):
+        sys.exit("ffmpeg is required: brew install ffmpeg")
+    books = expand_inputs(args.inputs)
+    if not books:
+        sys.exit("No PDF, EPUB or TXT files found.")
+    if len(books) > 1 and (args.output or args.cover or args.title or args.author):
+        sys.exit("-o, --cover, --title and --author apply to one book only. For a queue, name covers\n"
+                 "covers/<book file name>.jpg (or put them next to the books) and use --name-from-file.")
+
+    rendering = not (args.dry_run or args.list_unknown)
+    results = []
+    for n, path in enumerate(books, 1):
+        if len(books) > 1:
+            print(f"\n{'=' * 70}\n[{n}/{len(books)}] {path.name}\n{'=' * 70}", flush=True)
+        start = time.time()
+        tee = None
+        if rendering:
+            (PROJECT / "work" / path.stem).mkdir(parents=True, exist_ok=True)
+            tee = Tee(sys.stdout, PROJECT / "work" / path.stem / "render.log")
+            sys.stdout = tee
+        try:
+            status, detail = convert(path, args)
+        except Exception as e:  # one bad book shouldn't stop the queue
+            import traceback
+
+            traceback.print_exc()
+            status, detail = "failed", f"{type(e).__name__}: {e}"
+        finally:
+            if tee:
+                sys.stdout = tee.stream
+                tee.close()
+        minutes = (time.time() - start) / 60
+        results.append((path.name, status, detail, minutes))
+        if status == "skipped":
+            print(f"Skipped {path.name}: {detail}")
+        if rendering and status in ("done", "failed") and not args.no_notify:
+            notify("Audiobook finished" if status == "done" else "Audiobook problem",
+                   f"{path.stem} {'is ready' if status == 'done' else 'failed'}")
+
+    if len(books) > 1:
+        print(f"\n{'=' * 70}\nSummary")
+        for name, status, detail, minutes in results:
+            print(f"  {status.upper():8s} {name[:50]:50s} {minutes:6.1f} min  {detail}")
+    if any(status == "failed" for _, status, _, _ in results):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

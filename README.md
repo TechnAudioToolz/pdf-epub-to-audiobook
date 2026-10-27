@@ -63,7 +63,7 @@ Give it several files, a whole folder, or both. Books render one after another:
 .venv/bin/python audiobook.py book1.pdf book2.epub "/path/to/More Books/"
 ```
 
-- **Covers are found automatically**, in this order: `covers/<book file name>.jpg|png|webp` in this project, then an image next to the book (`<book>.jpg`, `<book>-Cover.jpg`, `cover.jpg` or `folder.jpg`), then the book's own first page.
+- **Covers are found automatically**, in this order: `covers/<book file name>.jpg|png|webp` in this project, then an image next to the book (`<book>.jpg`, `<book>-Cover.jpg`, `cover.jpg` or `folder.jpg`), then the book's own cover: an EPUB's cover image, or the first of a PDF's opening pages that looks like a cover (mostly a picture, few words). If there's none, a plain square cover is **generated** from the title and author.
 - **Finished books are skipped**, so re-running a folder only converts the new ones. `--force` redoes them. Interrupted books resume from the last finished chapter.
 - **One bad file doesn't stop the queue.** It's marked FAILED in the summary at the end.
 - **A Mac notification** appears as each book finishes (`--no-notify` turns it off).
@@ -86,6 +86,8 @@ nohup caffeinate -i .venv/bin/python audiobook.py "/path/to/My Books/" --name-fr
 | `--name-from-file` | Name each output after its input file |
 | `--force` | Redo books whose output already exists |
 | `--cover` | Cover image (single book only; queues find covers automatically) |
+| `--cover-choices N` | Write the first N pages to `work/<book>/cover-choices/` to pick from (the app's cover picker) |
+| `--generate-cover` | Write a cover generated from the title and author to the same folder |
 | `--title`, `--author`, `-o` | Override bad metadata or the output path (single book only) |
 | `--list-unknown` | List the words Kokoro has to guess, then stop |
 | `--keep LIST` | Also read things the cleanup skips, comma-separated: `page-numbers`, `headers`, `footnotes`, `tables`, `captions`, `citations`, `links`, `extras` (copyright, contents, references, index, about the author). In the app these are the **Also read** checkboxes |
@@ -185,7 +187,7 @@ app/make_dmg.sh          # packages it as app/build/Audiobook Maker.dmg (drag-to
 ```
 
 - **Add books:** drag PDFs, EPUBs or folders onto the window, or use **Add books**. Each one is checked right away for title, author and chapters.
-- **Book panel:** drop a cover image, edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
+- **Book panel:** click the cover to pick one of the book's first six pages, generate one from the title, paste an image, or choose an image file (or drop an image on it), edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
 - **Start queue** renders the books one after another with progress. **Pause** (⌘P) freezes the render, using no CPU, until **Resume**. **Stop** keeps finished chapters.
 - **Log** (⌘L) shows what the engine is doing: each chapter, and each paragraph as it's read (`--verbose` on the command line).
 - **Donate** opens the support page.

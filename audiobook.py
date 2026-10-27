@@ -133,6 +133,7 @@ class Book:
     author: str
     chapters: list
     cover: bytes | None = None
+    cover_note: str = ""  # where the cover came from, for the summary and the app
 
 
 # --------------------------------------------------------------------------- text cleanup
@@ -229,13 +230,7 @@ def load_epub(path: Path, academic: bool, keep=frozenset()) -> Book:
     meta = lambda k: (book.get_metadata("DC", k) or [("", {})])[0][0]
     title, author = title_and_author(meta("title"), meta("creator"), path)
 
-    cover = None
-    for item in book.get_items():
-        if item.get_type() == ebooklib.ITEM_COVER or (
-            item.get_type() == ebooklib.ITEM_IMAGE and "cover" in item.get_name().lower()
-        ):
-            cover = item.get_content()
-            break
+    cover = epub_cover(book)
 
     # Flatten the spine into a stream of (kind, text) where kind is 'h', 'p' or 'break'.
     stream = []
@@ -264,7 +259,43 @@ def load_epub(path: Path, academic: bool, keep=frozenset()) -> Book:
                 stream.append(("p", txt))
 
     chapters = split_stream(stream, toc_titles=epub_toc_titles(book, stream))
-    return Book(title, author, finalize(chapters, academic, keep), cover)
+    return Book(title, author, finalize(chapters, academic, keep), cover, "the EPUB's cover image" if cover else "")
+
+
+def epub_images(book):
+    """The EPUB's pictures in reading order: those its first pages show, then the rest (skipping tiny icons)."""
+    import posixpath
+
+    import ebooklib
+
+    images = [i for i in book.get_items() if i.get_type() in (ebooklib.ITEM_IMAGE, ebooklib.ITEM_COVER)]
+    by_name = {i.get_name(): i for i in images}
+    shown = []
+    for idref, _ in book.spine[:4]:
+        doc = book.get_item_with_id(idref)
+        if doc is None or doc.get_type() != ebooklib.ITEM_DOCUMENT:
+            continue
+        for src in re.findall(r'<(?:img[^>]+src|image[^>]+href)="([^"]+)"', doc.get_content().decode(errors="ignore")):
+            item = by_name.get(posixpath.normpath(posixpath.join(posixpath.dirname(doc.get_name()), src)))
+            if item and item not in shown:
+                shown.append(item)
+    rest = [i for i in images if i not in shown]
+    return [i for i in shown + rest if len(i.get_content()) > 10_000]
+
+
+def epub_cover(book):
+    """The cover image: the one the EPUB declares, else one named "cover", else the first picture it shows."""
+    import ebooklib
+
+    items = list(book.get_items())
+    declared = [i for i in items if i.get_type() == ebooklib.ITEM_COVER]
+    declared += [book.get_item_with_id(m[1].get("content")) for m in book.get_metadata("OPF", "cover") if m[1].get("content")]
+    declared += [i for i in items if i.get_type() == ebooklib.ITEM_IMAGE and "cover" in i.get_name().lower()]
+    for item in declared:
+        if item is not None:
+            return item.get_content()
+    images = epub_images(book)
+    return images[0].get_content() if images else None
 
 
 def epub_toc_titles(book, stream):
@@ -400,7 +431,9 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
         by_header = split_pdf_by_running_headers(stream, pages)
         if len(by_header) >= 4:
             chapters = by_header
-    return Book(title, author, finalize(chapters, academic, keep), pdf_cover(doc))
+    cover, cover_page = pdf_cover(doc)
+    note = f"page {cover_page + 1} of the PDF" if cover else ""
+    return Book(title, author, finalize(chapters, academic, keep), cover, note)
 
 
 def is_page_furniture(ln, repeated, academic, body_size, keep=frozenset()):
@@ -614,11 +647,91 @@ def split_pdf_by_running_headers(stream, pages):
     return [c for c in chapters if c.paragraphs]
 
 
+def page_image(page, max_px=1600, dpi=200):
+    """A page as a JPEG, sharp enough for a player's cover art but not huge."""
+    dpi = int(min(dpi, max_px * 72 / max(page.rect.height, page.rect.width, 1)))
+    return page.get_pixmap(dpi=dpi).tobytes("jpg", jpg_quality=85)
+
+
+def looks_like_cover(page):
+    """Mostly a picture, few words, and real ink on it: a cover, not a blank or a page of text."""
+    pymupdf = import_pymupdf()
+    area = abs(page.rect) or 1
+    pictured = sum(abs(pymupdf.Rect(i["bbox"]) & page.rect) for i in page.get_image_info())
+    if pictured / area < 0.45 or len(page.get_text("words")) > 60:
+        return False
+    small = page.get_pixmap(dpi=20, colorspace=pymupdf.csGRAY)
+    ink = sum(1 for b in small.samples if b < 200) / max(len(small.samples), 1)
+    return ink >= 0.10  # scanned blank pages are pictures too, but nearly white
+
+
 def pdf_cover(doc):
-    try:
-        return doc[0].get_pixmap(dpi=100).tobytes("jpg")
-    except Exception:
-        return None
+    """(JPEG, page index) for the first cover-like page among the first four, else (None, None)."""
+    for pno in range(min(4, len(doc))):
+        try:
+            if looks_like_cover(doc[pno]):
+                return page_image(doc[pno]), pno
+        except Exception:
+            continue
+    return None, None
+
+
+COVER_COLORS = [(0.20, 0.32, 0.55), (0.42, 0.27, 0.62), (0.13, 0.47, 0.38), (0.62, 0.36, 0.20),
+                (0.36, 0.40, 0.22), (0.55, 0.20, 0.24), (0.17, 0.17, 0.19), (0.16, 0.38, 0.52)]
+
+
+def generated_cover(title, author):
+    """A plain square cover: the title and author in a serif typeface on a color picked from the title,
+    for books without cover art. Square, because that's how audiobook players show covers."""
+    import hashlib
+
+    pymupdf = import_pymupdf()
+    size = 1400
+    color = COVER_COLORS[hashlib.md5(title.encode()).digest()[0] % len(COVER_COLORS)]
+
+    def fit(text, rect, font, largest, smallest):
+        """Largest font size at which `text` fits in `rect`, and the height left over."""
+        for fs in range(largest, smallest - 1, -4):
+            spare = pymupdf.open().new_page(width=size, height=size).insert_textbox(rect, text, fontsize=fs, fontname=font, align=1)
+            if spare >= 0:
+                return fs, spare
+        return smallest, 0
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=size, height=size)
+    page.draw_rect(page.rect, color=None, fill=color)
+    page.draw_rect(pymupdf.Rect(60, 60, size - 60, size - 60), color=(1, 1, 1), width=4, stroke_opacity=0.85)
+    box = pymupdf.Rect(150, 250, size - 150, 950)
+    fs, spare = fit(title, box, "Times-Bold", 150, 48)
+    page.insert_textbox(box + (0, spare / 2, 0, spare / 2), title, fontsize=fs, fontname="Times-Bold",
+                        color=(1, 1, 1), align=1)
+    if author:
+        page.draw_line((size / 2 - 90, 1030), (size / 2 + 90, 1030), color=(1, 1, 1), width=2, stroke_opacity=0.7)
+        box = pymupdf.Rect(150, 1070, size - 150, 1230)
+        fs, _ = fit(author, box, "Times-Italic", 64, 32)
+        page.insert_textbox(box, author, fontsize=fs, fontname="Times-Italic", color=(0.92, 0.92, 0.92), align=1)
+    return page.get_pixmap(dpi=72).tobytes("jpg", jpg_quality=90)
+
+
+def cover_choices(path, book, folder, pages=6, pictures=()):
+    """Writes candidate covers for the app's cover picker: the book's first pages (PDF), or its cover and
+    pictures (EPUB). The generated cover is made separately, on request (--generate-cover). Returns [(file, label)]."""
+    out = []
+    if path.suffix.lower() == ".pdf":
+        doc = import_pymupdf().open(str(path))
+        for pno in range(min(pages, len(doc))):
+            f = folder / f"page-{pno + 1:03d}.jpg"
+            f.write_bytes(page_image(doc[pno]))
+            out.append((f, f"Page {pno + 1}"))
+    else:
+        others = [p for p in pictures if p != book.cover]
+        for n, data in enumerate(([book.cover] if book.cover else []) + others):
+            if len(out) == pages:
+                break
+            f = folder / f"picture-{n + 1:03d}.jpg"
+            f.write_bytes(data)  # JPEG or PNG; the app and ffmpeg read either
+            out.append((f, "The book's cover" if n == 0 and book.cover else f"Picture {n + 1}"))
+    return out
 
 
 # --------------------------------------------------------------------------- shared
@@ -1131,8 +1244,40 @@ class Tee:
             self.file.close()
 
 
+def cover_tools(path, args):
+    """--cover-choices / --generate-cover for the app's cover picker. Quick: reads only the title, author and
+    first pages, never the whole book."""
+    folder = PROJECT / "work" / path.stem / "cover-choices"
+    folder.mkdir(parents=True, exist_ok=True)
+    ext = path.suffix.lower()
+    title, author, own_cover, epub_pictures = None, None, None, []
+    if ext == ".pdf":
+        meta = import_pymupdf().open(str(path)).metadata or {}
+        title, author = meta.get("title"), meta.get("author")
+    elif ext == ".epub":
+        from ebooklib import epub
+
+        book = epub.read_epub(str(path), options={"ignore_ncx": True})
+        meta = lambda k: (book.get_metadata("DC", k) or [("", {})])[0][0]
+        title, author = meta("title"), meta("creator")
+        own_cover = epub_cover(book)
+        epub_pictures = [i.get_content() for i in epub_images(book)]
+    title, author = title_and_author(title, author, path)
+    book = Book(args.title or title, args.author or author, [], own_cover)
+    if args.cover_choices:
+        for f, label in cover_choices(path, book, folder, args.cover_choices, epub_pictures):
+            print(f"Cover choice: {f}\t{label}")
+    if args.generate_cover:
+        f = folder / "generated.jpg"
+        f.write_bytes(generated_cover(book.title, book.author))
+        print(f"Cover choice: {f}\tGenerated")
+    return "checked", "cover choices written"
+
+
 def convert(path, args):
     """Convert one book. Returns (status, detail) where status is done / skipped / checked."""
+    if args.cover_choices or args.generate_cover:
+        return cover_tools(path, args)
     keep = set(KEEP_CHOICES) if args.read_all else {k.strip() for k in (args.keep or "").split(",") if k.strip()}
     book = load_book(path, academic=not args.fiction, keep=frozenset(keep))
     book.title = args.title or book.title
@@ -1140,6 +1285,10 @@ def convert(path, args):
     cover = args.cover or find_cover(path)
     if cover:
         book.cover = cover.read_bytes()
+        book.cover_note = f"your image, {cover.name}" if args.cover else f"found {cover.name}"
+    elif not book.cover:
+        book.cover = generated_cover(book.title, book.author)
+        book.cover_note = "generated from the title (no cover art in the book)"
     if not book.chapters:
         raise ValueError("No readable text found. If it's a scanned PDF, run it through OCR first "
                          "(brew install ocrmypdf && ocrmypdf --skip-text in.pdf out.pdf).")
@@ -1157,7 +1306,9 @@ def convert(path, args):
     print(f"{len(book.chapters)} chapters, {words:,} words, ~{words / 155 / 60 / args.speed:.1f} h of audio")
     for i, c in enumerate(book.chapters, 1):
         print(f"  {i:3d}. {c.title[:60]:60s} {len(c.text.split()):>7,} words")
-    print(f"Cover: {cover.name if cover else ('from the book' if book.cover else 'none')}")
+    print(f"Cover: {book.cover_note}")
+    (work / "cover-preview.jpg").write_bytes(book.cover)
+    print(f"Cover image: {work / 'cover-preview.jpg'}")
     print(f"Cleaned text: {work / 'cleaned.txt'}")
     rules = load_pronunciations(book=path.stem)
     lang = args.lang or args.voice.strip()[0]
@@ -1208,6 +1359,10 @@ def main():
     ap.add_argument("--cover", type=Path,
                     help="cover image, single book only (default: covers/<book>.*, an image next to the book, "
                          "or the book's own cover)")
+    ap.add_argument("--cover-choices", type=int, metavar="N",
+                    help="write the first N pages to work/<book>/cover-choices, then stop (the app's cover picker)")
+    ap.add_argument("--generate-cover", action="store_true",
+                    help="write a cover generated from the title and author to work/<book>/cover-choices, then stop")
     ap.add_argument("--title", help="override book title (single book only)")
     ap.add_argument("--author", help="override author (single book only)")
     ap.add_argument("--format", choices=["m4b", "mp3"], default="m4b",

@@ -81,6 +81,7 @@ final class AppModel: ObservableObject {
     @Published var lastMessage = ""
 
     private var current: Process?
+    private let speech = SpeechServer()
     private var stopRequested = false
 
     var selectedBook: Book? { books.first { $0.id == selection } }
@@ -202,9 +203,12 @@ final class AppModel: ObservableObject {
 
     func listen(_ text: String, book: Book?) {
         guard let engine else { return }
-        var args = [engine.script("say.py"), text, "--voice", voice, "--speed", String(format: "%.2f", speed)]
-        if let book { args += ["--book", book.fileStem] }
-        engine.run(args, onLine: { _ in }, onExit: { _ in })
+        speech.say(text, voice: voice, speed: speed, book: book?.fileStem, engine: engine)
+    }
+
+    /// Load the voice in the background so the first Listen is quick.
+    func warmUpSpeech() {
+        if let engine, engine.isInstalled { speech.warmUp(engine) }
     }
 
     /// Adds "word = say as" to this book's pronunciation rules.
@@ -296,6 +300,7 @@ final class AppModel: ObservableObject {
     func reloadEngine() {
         engine = Engine.locate()
         engine?.refreshScripts()
+        warmUpSpeech()
     }
 
     var statusLine: String {

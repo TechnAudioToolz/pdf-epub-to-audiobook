@@ -243,3 +243,49 @@ final class Installer: ObservableObject {
         }
     }
 }
+
+/// Keeps `say.py --serve` running so Listen doesn't reload the voice model every time
+/// (about 1 second per Listen instead of 5-10). It exits when the app quits.
+@MainActor
+final class SpeechServer {
+    private var process: Process?
+    private var input: FileHandle?
+    private var root: URL?
+
+    /// Start loading in the background, ahead of the first Listen.
+    func warmUp(_ engine: Engine) {
+        if let process, process.isRunning, root == engine.root { return }
+        process?.terminate()
+        let p = Process()
+        p.executableURL = engine.python
+        p.arguments = [engine.script("say.py"), "--serve"]
+        p.currentDirectoryURL = engine.root
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PATH"] = engine.root.appendingPathComponent("bin").path + ":/opt/homebrew/bin:/usr/local/bin:"
+            + (env["PATH"] ?? "/usr/bin:/bin")
+        p.environment = env
+        let stdin = Pipe()
+        p.standardInput = stdin
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        p.qualityOfService = .userInitiated
+        do {
+            try p.run()
+            process = p
+            input = stdin.fileHandleForWriting
+            root = engine.root
+        } catch {
+            process = nil
+        }
+    }
+
+    /// Requests sent while it's still loading are answered as soon as it's ready.
+    func say(_ text: String, voice: String, speed: Double, book: String?, engine: Engine) {
+        warmUp(engine)
+        var request: [String: Any] = ["text": text, "voice": voice, "speed": speed]
+        if let book { request["book"] = book }
+        guard let input, let data = try? JSONSerialization.data(withJSONObject: request) else { return }
+        input.write(data + Data("\n".utf8))
+    }
+}

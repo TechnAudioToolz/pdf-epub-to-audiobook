@@ -119,9 +119,7 @@ struct BookDetail: View {
 
             Section("Voice") {
                 HStack {
-                    Picker("Voice", selection: $model.voice) {
-                        ForEach(AppModel.voices, id: \.id) { v in Text(v.label).tag(v.id) }
-                    }
+                    VoicePicker(voice: $model.voice)
                     Button { model.listen("This is how \(book.displayTitle) will sound.", book: book) } label: {
                         Label("Listen", systemImage: "speaker.wave.2")
                     }
@@ -180,5 +178,22 @@ struct BookDetail: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Voice menu with all 28 English voices under American/British, female/male headings.
+struct VoicePicker: View {
+    @Binding var voice: String
+
+    var body: some View {
+        Picker("Voice", selection: $voice) {
+            ForEach(AppModel.voiceGroups, id: \.prefix) { group in
+                Section(group.title) {
+                    ForEach(group.names, id: \.self) { name in
+                        Text(name.capitalized).tag("\(group.prefix)_\(name)")
+                    }
+                }
+            }
+        }
     }
 }

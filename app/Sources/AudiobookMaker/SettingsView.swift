@@ -63,9 +63,7 @@ private struct VoiceSettings: View {
     var body: some View {
         Form {
             Section("Default for new books") {
-                Picker("Voice", selection: $model.voice) {
-                    ForEach(AppModel.voices, id: \.id) { v in Text(v.label).tag(v.id) }
-                }
+                VoicePicker(voice: $model.voice)
                 HStack {
                     Text("Speed")
                     Slider(value: $model.speed, in: 0.8...1.3, step: 0.05)

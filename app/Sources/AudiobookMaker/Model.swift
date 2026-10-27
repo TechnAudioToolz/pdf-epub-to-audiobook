@@ -49,13 +49,16 @@ final class Book: ObservableObject, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
-    static let voices: [(id: String, label: String)] = [
-        ("af_alloy", "Alloy · US female"), ("af_heart", "Heart · US female"), ("af_bella", "Bella · US female"),
-        ("af_nicole", "Nicole · US female"), ("af_sarah", "Sarah · US female"), ("af_sky", "Sky · US female"),
-        ("am_michael", "Michael · US male"), ("am_adam", "Adam · US male"), ("am_fenrir", "Fenrir · US male"),
-        ("am_puck", "Puck · US male"), ("bf_emma", "Emma · UK female"), ("bf_isabella", "Isabella · UK female"),
-        ("bm_george", "George · UK male"), ("bm_lewis", "Lewis · UK male"), ("bm_daniel", "Daniel · UK male"),
+    /// All 28 English Kokoro voices (the same set as voices.py), grouped for the picker.
+    static let voiceGroups: [(title: String, prefix: String, names: [String])] = [
+        ("American female", "af", ["alloy", "aoede", "bella", "heart", "jessica", "kore", "nicole", "nova", "river", "sarah", "sky"]),
+        ("American male", "am", ["adam", "echo", "eric", "fenrir", "liam", "michael", "onyx", "puck", "santa"]),
+        ("British female", "bf", ["alice", "emma", "isabella", "lily"]),
+        ("British male", "bm", ["daniel", "fable", "george", "lewis"]),
     ]
+    static let voices: [(id: String, label: String)] = voiceGroups.flatMap { group in
+        group.names.map { ("\(group.prefix)_\($0)", $0.capitalized) }
+    }
     static let bookTypes = ["pdf", "epub", "txt"]
 
     @Published var books: [Book] = []

@@ -151,7 +151,7 @@ struct ContentView: View {
                 } label: { Label("Output folder", systemImage: "folder") }
                 Toggle(isOn: $model.showLog) { Label("Log", systemImage: "text.alignleft") }
                     .keyboardShortcut("l")
-                    .help("Show what the engine is doing, paragraph by paragraph (⌘L)")
+                    .help("Show what the engine is doing: each chapter, progress and time left (⌘L)")
                 SettingsButton()
                 Button { openDonatePage() } label: { Label("Donate", systemImage: "heart") }
                     .help("Support this project")

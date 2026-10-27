@@ -117,6 +117,9 @@ final class AppModel: ObservableObject {
     @Published var isPaused = false
     /// The engine's own output while rendering (the Log panel), newest last.
     @Published var log: [String] = []
+    /// The latest progress report ("Chapter 7 of 38 · 42% of chapter · 18% of book · about 6 h left"),
+    /// shown as one line at the bottom of the Log that updates in place.
+    @Published var liveStatus = ""
     @Published var showLog = UserDefaults.standard.bool(forKey: "showLog") {
         didSet { UserDefaults.standard.set(showLog, forKey: "showLog") }
     }
@@ -378,15 +381,19 @@ final class AppModel: ObservableObject {
         book.detail = "Starting…"
         var skipped = false
         var lastError = ""
-        var chapter: (index: Int, total: Int)?
+        var chapter = ""
         appendLog("=== \(book.displayTitle) ===")
         current = engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--verbose"], onLine: { [weak self] line in
+            if let report = EngineOutput.report(line) {
+                // progress every ~10 seconds: one updating line, not a log entry
+                if let pct = report.bookPercent { book.progress = Double(pct) / 100 }
+                self?.liveStatus = "\(chapter) · \(report.text)"
+                if let left = report.timeLeft { book.detail = "\(chapter) · about \(left) left" }
+                return
+            }
             self?.appendLog(line)
-            if let para = EngineOutput.paragraph(line), let ch = chapter {
-                // move the bar within the chapter too, so a long chapter visibly advances
-                book.progress = (Double(ch.index - 1) + Double(para.index - 1) / Double(para.total)) / Double(ch.total)
-            } else if let p = EngineOutput.progress(line) {
-                chapter = (p.index, p.total)
+            if let p = EngineOutput.progress(line) {
+                chapter = "Chapter \(p.index) of \(p.total)"
                 book.progress = Double(p.cached ? p.index : p.index - 1) / Double(p.total)
                 book.detail = "Chapter \(p.index) of \(p.total): \(p.title)"
             } else if let minutes = EngineOutput.minutesLeft(line) {
@@ -414,6 +421,7 @@ final class AppModel: ObservableObject {
                 book.detail = lastError.isEmpty ? "Something went wrong" : lastError
             }
             self?.isPaused = false
+            self?.liveStatus = ""
             self?.renderNext()
         })
     }

@@ -171,10 +171,11 @@ enum EngineOutput {
         return (i, n, title, cached)
     }
 
-    /// "  [p 12/340] First words of the paragraph…"  (--verbose)
-    static func paragraph(_ line: String) -> (index: Int, total: Int)? {
-        guard let m = match(#"^\s+\[p (\d+)/(\d+)\]"#, line), let i = Int(m[1]), let n = Int(m[2]) else { return nil }
-        return (i, n)
+    /// "  [p 12/340] 42% of chapter · 18% of book · about 6 h 10 min left"  (--verbose, every ~10 seconds)
+    static func report(_ line: String) -> (text: String, bookPercent: Int?, timeLeft: String?)? {
+        guard let m = match(#"^\s+\[p \d+/\d+\]\s*(.*)$"#, line) else { return nil }
+        let pct = match(#"(\d+)% of book"#, m[1]).flatMap { Int($0[1]) }
+        return (m[1], pct, match(#"about (.+) left"#, m[1])?[1])
     }
 
     /// "    done; elapsed 12.3 min, ~45 min left"

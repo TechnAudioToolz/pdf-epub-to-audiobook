@@ -421,7 +421,7 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
                               and len(ln["text"].split()) <= 12)
             ln["caps"] = caps_title
             if caps_title:
-                ln["text"] = tidy_title(ln["text"])
+                ln["text"] = tidy_title(ln["text"], continued=bool(last.get("caps")))
             heading = (bool(marker) or caps_title or ln["size"] >= body_size * 1.15
                        or (ln["bold"] and len(ln["text"]) < 80 and ln["block_lines"] <= 2))
             ln["marker"] = bool(marker)
@@ -472,17 +472,19 @@ def chapter_marker(text):
 SMALL_WORDS = set("a an and as at but by for from in into nor of on or the to with".split())
 
 
-def tidy_title(t):
-    """ "MY INTRODUCTION TO HUMANITY" -> "My Introduction to Humanity" (Roman numerals stay as they are)."""
+def tidy_title(t, continued=False):
+    """ "MY INTRODUCTION TO HUMANITY" -> "My Introduction to Humanity" (Roman numerals stay as they are).
+    continued: the second line of a title, so its first word isn't the title's first word."""
     words = re.sub(r"\s+", " ", t).strip().split(" ")
     out = []
     for i, w in enumerate(words):
-        if re.fullmatch(r"[IVXLC]+[.:,]?", w):
+        bare = w.strip("\"'“”‘’()[]")
+        if re.fullmatch(r"[IVXLC]+[.:,]?", bare):
             out.append(w)
-        elif i and w.lower() in SMALL_WORDS:
+        elif (i or continued) and bare.lower() in SMALL_WORDS:
             out.append(w.lower())
-        else:
-            out.append(w[:1].upper() + w[1:].lower())
+        else:  # capitalise the first letter, even after an opening quote: '"FREE' -> '"Free'
+            out.append(re.sub(r"[A-Za-z]", lambda m: m.group(0).upper(), w.lower(), count=1))
     return " ".join(out)
 
 
@@ -1106,9 +1108,18 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
         for r in pipe(spoken_title, voice=voice, speed=speed):
             pieces.append(r.audio.numpy())
         pieces.append(title_gap)
+        ch_chars, ch_done, last_report = sum(len(p) for p in spoken_paras) or 1, 0, 0.0
         for n, p in enumerate(spoken_paras, 1):
-            if verbose:  # what is being read right now: "  [p 12/340] First words of the paragraph…"
-                print(f"  [p {n}/{len(spoken_paras)}] {p[:110] + '…' if len(p) > 110 else p}", flush=True)
+            if verbose and (n == 1 or time.time() - last_report >= 10):
+                # every ~10 seconds: "  [p 12/340] 42% of chapter · 18% of book · about 6 h 10 min left"
+                last_report = time.time()
+                book_done = done_chars + len(ch.text) * ch_done / ch_chars
+                pct_book = 100 * book_done / max(total_chars, 1)
+                el = time.time() - start
+                eta = f" · about {duration_words(el / book_done * (total_chars - book_done))} left" if el > 30 and book_done else ""
+                print(f"  [p {n}/{len(spoken_paras)}] {100 * ch_done / ch_chars:.0f}% of chapter · "
+                      f"{pct_book:.0f}% of book{eta}", flush=True)
+            ch_done += len(p)
             for r in pipe(p, voice=voice, speed=speed, split_pattern=r"\n+"):
                 if r.audio is not None:
                     pieces.append(r.audio.numpy())
@@ -1121,6 +1132,12 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
         el = time.time() - start
         eta = el / max(done_chars, 1) * (total_chars - done_chars)
         print(f"    done; elapsed {el/60:.1f} min, ~{eta/60:.0f} min left", flush=True)
+
+
+def duration_words(seconds):
+    """3725 -> "1 h 2 min", 300 -> "5 min"."""
+    minutes = round(seconds / 60)
+    return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{max(minutes, 1)} min"
 
 
 def wav_duration(path):
@@ -1460,7 +1477,7 @@ def main():
     ap.add_argument("--list-unknown", action="store_true",
                     help="list words Kokoro doesn't know (likely mispronounced), then stop")
     ap.add_argument("-v", "--verbose", action="store_true",
-                    help="print each paragraph as it is read, so you can follow along")
+                    help="every ~10 seconds, print how far into the chapter and book it is, and the time left")
     ap.add_argument("--no-notify", action="store_true", help="no Mac notification when each book finishes")
     args = ap.parse_args()
     unknown = {k.strip() for k in (args.keep or "").split(",") if k.strip()} - set(KEEP_CHOICES)

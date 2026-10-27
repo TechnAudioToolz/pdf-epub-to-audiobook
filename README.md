@@ -1,7 +1,7 @@
-# PDF / EPUB → Audiobook (local, offline)
+# Audiobook Maker: PDF / EPUB → Audiobook for Mac (local, offline)
 
-Converts a PDF, EPUB or TXT into a chaptered `.m4b` audiobook using [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) TTS on your Mac.
-Nothing leaves the machine after the one-time model download (~330 MB).
+A free, open-source Mac app and command-line tool that turns PDFs, EPUBs and text files into audiobooks: chaptered `.m4b` files (or MP3s) with covers, read aloud by natural-sounding [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) text-to-speech voices.
+Nothing leaves the machine after the one-time model download (~330 MB). Listen in Apple Books, BookPlayer or any audiobook player on your phone.
 
 **Why:** to help people take in knowledge by listening instead of reading, especially people with dyslexia, and anyone who learns best on the go: walking, driving, working with their hands. Any book or paper you have can become an audiobook, privately and for free.
 
@@ -190,7 +190,7 @@ app/make_dmg.sh          # packages it as app/build/Audiobook Maker.dmg (drag-to
 - **Add books:** drag PDFs, EPUBs or folders onto the window, or use **Add books**. Each one is checked right away for title, author and chapters.
 - **Book panel:** click the cover to pick one of the book's first six pages, generate one from the title, paste an image, or choose an image file (or drop an image on it), edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
 - **Start queue** renders the books one after another with progress. **Pause** (⌘P) freezes the render, using no CPU, until **Resume**. **Stop** keeps finished chapters.
-- **Log** (⌘L) shows what the engine is doing: each chapter, and each paragraph as it's read (`--verbose` on the command line).
+- **Log** (⌘L) shows what the engine is doing: each chapter as it starts and finishes, plus one live line with how far into the chapter and the book it is and the time left, updated about every 10 seconds (`--verbose` on the command line).
 - **Donate** opens the support page.
 - **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, what else to read (page numbers, headers, footnotes and so on), M4B or one MP3 per chapter, default voice and speed, pronunciation lists, and the tools folder.
 

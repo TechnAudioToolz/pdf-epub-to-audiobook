@@ -328,7 +328,7 @@ struct VoicePicker: View {
     }
 }
 
-/// The engine's output, live: each chapter, each paragraph as it is read, timings and errors.
+/// The engine's output, live: each chapter, timings and errors, plus one updating progress line.
 struct LogView: View {
     @EnvironmentObject var model: AppModel
 
@@ -337,12 +337,11 @@ struct LogView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     if model.log.isEmpty {
-                        Text("Start the queue to see each chapter and paragraph here as it's read.")
+                        Text("Start the queue to see each chapter here, with how far along it is and the time left.")
                             .foregroundColor(.secondary)
                     }
                     ForEach(Array(model.log.enumerated()), id: \.offset) { i, line in
                         Text(line)
-                            .foregroundColor(line.hasPrefix("  [p ") ? .secondary : .primary)
                             .textSelection(.enabled)
                             .id(i)
                     }
@@ -350,6 +349,16 @@ struct LogView: View {
                 .font(.system(.caption, design: .monospaced))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if !model.liveStatus.isEmpty {
+                    Text(model.liveStatus)
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(.bar)
+                        .accessibilityLabel("Progress: \(model.liveStatus)")
+                }
             }
             .background(Color(nsColor: .textBackgroundColor))
             .onChange(of: model.log.count) { count in

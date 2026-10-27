@@ -11,9 +11,11 @@ enum Screenshots {
         // the demo changes these saved settings; put them back afterwards
         let savedVoice = UserDefaults.standard.string(forKey: "voice")
         let savedOutput = UserDefaults.standard.string(forKey: "outputPath")
+        let savedShowLog = model.showLog
         func restore() {
             UserDefaults.standard.set(savedVoice, forKey: "voice")
             UserDefaults.standard.set(savedOutput, forKey: "outputPath")
+            UserDefaults.standard.set(savedShowLog, forKey: "showLog")
         }
         loadDemo(model)
         try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -71,17 +73,17 @@ enum Screenshots {
 
     private static func loadDemo(_ model: AppModel) {
         let demo: [(String, String, NSColor, BookState, Double, String)] = [
-            ("The Holographic Universe", "Michael Talbot", NSColor(calibratedRed: 0.20, green: 0.32, blue: 0.55, alpha: 1),
-             .rendering, 0.38, "Chapter 4 of 10: I Sing the Body Holographic · about 48 min left"),
-            ("Between Death and Life", "Dolores Cannon", NSColor(calibratedRed: 0.42, green: 0.27, blue: 0.62, alpha: 1),
-             .done, 1, "Dolores Cannon - Between Death and Life.m4b"),
-            ("Money and the Law of Attraction", "Esther and Jerry Hicks", NSColor(calibratedRed: 0.13, green: 0.47, blue: 0.38, alpha: 1),
+            ("The Call of the Wild", "Jack London", NSColor(calibratedRed: 0.36, green: 0.40, blue: 0.22, alpha: 1),
+             .rendering, 0.52, "Chapter 4 of 7: Who Has Won to Mastership · about 21 min left"),
+            ("Autobiography of Benjamin Franklin", "Benjamin Franklin", NSColor(calibratedRed: 0.24, green: 0.45, blue: 0.22, alpha: 1),
+             .done, 1, "Autobiography of Benjamin Franklin.m4b"),
+            ("The Works of Edgar Allan Poe, Volume 2", "Edgar Allan Poe", NSColor(calibratedRed: 0.17, green: 0.17, blue: 0.19, alpha: 1),
              .ready, 0, ""),
-            ("Why You're Dumb, Sick and Broke", "Randy Gage", NSColor(calibratedRed: 0.62, green: 0.36, blue: 0.20, alpha: 1),
+            ("Life on the Mississippi", "Mark Twain", NSColor(calibratedRed: 0.42, green: 0.28, blue: 0.18, alpha: 1),
              .waiting, 0, ""),
         ]
         model.books = demo.map { title, author, color, state, progress, detail in
-            let book = Book(url: URL(fileURLWithPath: "/Books/\(title).pdf"))
+            let book = Book(url: URL(fileURLWithPath: "/Books/\(title).epub"))
             book.title = title
             book.author = author
             book.cover = cover(title: title, author: author, color: color)
@@ -90,19 +92,19 @@ enum Screenshots {
             book.detail = detail
             return book
         }
-        let talbot = model.books[0]
-        talbot.summary = "10 chapters, 118,240 words, ~12.7 h of audio"
-        talbot.coverNote = "Found: The Holographic Universe.jpg"
-        talbot.chapters = ["Introduction", "The Brain as Hologram", "The Cosmos as Hologram",
-                           "The Holographic Model and Psychology", "I Sing the Body Holographic",
-                           "A Pocketful of Miracles", "Seeing Holographically", "Time Out of Mind",
-                           "Traveling in the Superhologram", "Return to the Dreamtime"]
-        talbot.unknownWords = [WordCount(word: "Pribram", count: 64), WordCount(word: "superhologram", count: 12),
-                               WordCount(word: "Grof", count: 38), WordCount(word: "Ullman", count: 9)]
-        model.selection = talbot.id
+        let london = model.books[0]
+        london.summary = "7 chapters, 31,960 words, ~3.4 h of audio"
+        london.coverNote = "Found: The Call of the Wild.jpg"
+        london.chapters = ["Into the Primitive", "The Law of Club and Fang", "The Dominant Primordial Beast",
+                           "Who Has Won to Mastership", "The Toil of Trace and Trail", "For the Love of a Man",
+                           "The Sounding of the Call"]
+        london.unknownWords = [WordCount(word: "Sol-leks", count: 18), WordCount(word: "Dyea", count: 4),
+                               WordCount(word: "Skaguay", count: 3), WordCount(word: "Perrault", count: 31)]
+        model.selection = london.id
         model.voice = "bm_george"
         model.outputPath = "/Users/you/Audiobooks"  // a neutral path for the status bar
         model.lastMessage = ""
+        model.showLog = false
     }
 
     private static func cover(title: String, author: String, color: NSColor) -> NSImage {

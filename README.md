@@ -15,7 +15,7 @@ On an M1 Pro it runs at about **5.5× realtime** on CPU, so a 6.6-hour book take
 - Open the `.dmg` and drag **Audiobook Maker** to Applications.
 - The app isn't registered with Apple, so the first time macOS blocks it: go to **System Settings → Privacy and Security** and click **Open Anyway**. You only do this once.
 - On first launch it downloads its voice engine (about 1.3 GB, one time). After that it works offline and your books never leave your Mac.
-- **No internet on that Mac, or a slow connection?** Download **`Audiobook-Maker-0.1-offline.dmg`** from the same release instead (about 700 MB). Python, the libraries and all 28 English voices are inside it, so setup takes seconds and needs no connection.
+- **No internet on that Mac, or a slow connection?** Download **`Audiobook-Maker-0.1-offline.dmg`** from the same release instead (about 660 MB). Python, the libraries and all 28 English voices are inside it, so setup takes seconds and needs no connection.
 
 Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fix any mispronounced words, and render a queue of audiobooks with chapters and covers. Everything below is the command-line version of the same tools.
 

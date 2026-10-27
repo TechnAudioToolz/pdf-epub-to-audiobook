@@ -169,6 +169,9 @@ def detect(args):
         cands = json.loads(cache.read_text())
         print(f"Using cached pause transcripts from {cache} (--rescan to redo)")
     else:
+        from audiobook import stay_offline_if_downloaded
+
+        stay_offline_if_downloaded(f"Systran/faster-whisper-{args.model}", ["model.bin"])
         from faster_whisper import WhisperModel
 
         print("Scanning for pauses (a few minutes for a long book)...", flush=True)

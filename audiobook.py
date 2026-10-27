@@ -30,6 +30,17 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 SAMPLE_RATE = 24000
 PROJECT = Path(__file__).resolve().parent  # all output stays inside the project folder
 
+
+def stay_offline_if_downloaded(repo, files):
+    """The model libraries check huggingface.co for updates every time they start. When the files a
+    run needs are already downloaded, tell them to stay offline: nothing about your books is ever
+    sent, but there's no reason to call out at all. Missing files (a first run, a new voice) still
+    download normally."""
+    home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    snapshots = home / "hub" / ("models--" + repo.replace("/", "--")) / "snapshots"
+    if snapshots.is_dir() and any(all((s / f).exists() for f in files) for s in snapshots.iterdir()):
+        os.environ["HF_HUB_OFFLINE"] = "1"
+
 # Sections that are noise when listening to non-fiction / academic material.
 SKIP_SECTIONS = re.compile(
     r"^\s*((references|bibliography)( and (references|bibliography|notes))?|works cited|literature cited|"
@@ -935,6 +946,8 @@ def main():
 
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg is required: brew install ffmpeg")
+    voices = [v.strip() for v in args.voice.split(",")]
+    stay_offline_if_downloaded("hexgrad/Kokoro-82M", ["config.json", "kokoro-v1_0.pth"] + [f"voices/{v}.pt" for v in voices])
     books = expand_inputs(args.inputs)
     if not books:
         sys.exit("No PDF, EPUB or TXT files found.")

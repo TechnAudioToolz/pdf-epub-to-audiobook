@@ -10,6 +10,7 @@ struct SetupView: View {
             Image(systemName: "waveform.circle")
                 .font(.system(size: 56))
                 .foregroundColor(.accentColor)
+                .accessibilityHidden(true)
             Text("Set up Audiobook Maker").font(.title)
 
             if installer.running {

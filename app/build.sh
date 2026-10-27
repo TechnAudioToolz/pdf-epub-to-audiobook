@@ -12,6 +12,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/arm64-apple-macosx/release/AudiobookMaker "$APP/Contents/MacOS/AudiobookMaker"
 cp Resources/donate.html "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"   # redraw with: swift make_icon.swift
 
 # Everything first-launch setup needs: the tool scripts, the installer, and uv (installs Python + libraries).
 mkdir -p "$APP/Contents/Resources/engine" "$APP/Contents/Resources/bin"

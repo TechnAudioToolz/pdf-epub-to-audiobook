@@ -113,11 +113,16 @@ struct ContentView: View {
         .toolbar {
             ToolbarItemGroup {
                 Button { model.add(chooseBooks()) } label: { Label("Add books", systemImage: "plus") }
-                    .help("Add PDF, EPUB or TXT files, or a folder of them")
+                    .help("Add PDF, EPUB or TXT files, or a folder of them (⌘O)")
+                    .keyboardShortcut("o")
                 if model.isRunning {
                     Button { model.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                        .keyboardShortcut(".")
+                        .help("Stop the queue (⌘.)")
                 } else {
                     Button { model.startQueue() } label: { Label("Start queue", systemImage: "play.fill") }
+                        .keyboardShortcut("r")
+                        .help("Start the queue (⌘R)")
                         .disabled(model.books.isEmpty || model.engine == nil)
                 }
                 Button {
@@ -151,6 +156,7 @@ struct ContentView: View {
             if model.books.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "books.vertical").font(.system(size: 36)).foregroundColor(.secondary)
+                        .accessibilityHidden(true)
                     Text("Drop books here").font(.title3)
                     Text("PDF, EPUB or TXT files, or a folder of them").foregroundColor(.secondary)
                     Button("Add books…") { model.add(chooseBooks()) }
@@ -169,6 +175,8 @@ struct ContentView: View {
                             }
                     }
                 }
+                .onDeleteCommand { if let book = model.selectedBook { model.remove(book) } }  // Delete key
+                .accessibilityLabel("Books in the queue")
             }
         }
         .background(dropTargeted ? Color.accentColor.opacity(0.08) : Color.clear)

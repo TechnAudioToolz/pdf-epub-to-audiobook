@@ -40,6 +40,19 @@ struct BookRow: View {
             StateBadge(state: book.state)
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        var parts = [book.displayTitle]
+        if !book.author.isEmpty { parts.append(book.author) }
+        parts.append(book.state.label)
+        if book.state == .rendering {
+            parts.append("\(Int(book.progress * 100)) percent")
+            if !book.detail.isEmpty { parts.append(book.detail) }
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -62,6 +75,7 @@ struct StateBadge: View {
             .background(color.opacity(0.15))
             .foregroundColor(color)
             .clipShape(Capsule())
+            .accessibilityLabel("Status: \(state.label)")
     }
 }
 
@@ -79,6 +93,8 @@ struct BookDetail: View {
                         CoverView(image: book.cover, width: 90)
                             .overlay(RoundedRectangle(cornerRadius: 4)
                                 .stroke(coverTargeted ? Color.accentColor : .clear, lineWidth: 2))
+                            .accessibilityLabel(book.cover == nil ? "No cover. Drop an image file here to add one."
+                                                                  : "Cover image. Drop another image here to replace it.")
                             .onDrop(of: [.fileURL], isTargeted: $coverTargeted) { providers in
                                 loadURLs(providers) { urls in
                                     if let url = urls.first { model.setCover(url, for: book) }
@@ -145,10 +161,12 @@ struct BookDetail: View {
                             Spacer()
                             Button { model.listen(item.word, book: book) } label: { Image(systemName: "speaker.wave.2") }
                                 .help("Listen")
+                                .accessibilityLabel("Listen to \(item.word)")
                             TextField("Say as…", text: Binding(
                                 get: { fixes[item.word, default: ""] },
                                 set: { fixes[item.word] = $0 }))
                                 .frame(width: 120)
+                                .accessibilityLabel("Say \(item.word) as")
                             Button("Save") { model.savePronunciation(word: item.word, sayAs: fixes[item.word, default: ""], book: book) }
                                 .disabled(fixes[item.word, default: ""].isEmpty)
                         }

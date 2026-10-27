@@ -156,6 +156,7 @@ A simple window for everything above: drag in books, check chapters, pick a voic
 
 ```bash
 app/build.sh --open      # builds "Audiobook Maker.app" into app/build/ and opens it
+app/make_dmg.sh          # packages it as app/build/Audiobook Maker.dmg (drag-to-Applications installer)
 ```
 
 - **Add books:** drag PDFs, EPUBs or folders onto the window, or use **Add books**. Each one is checked right away for title, author and chapters.

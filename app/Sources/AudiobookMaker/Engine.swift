@@ -157,9 +157,9 @@ enum EngineOutput {
         match(#"done; elapsed [\d.]+ min, ~(\d+) min left"#, line).flatMap { Int($0[1]) }
     }
 
-    /// "Wrote /path/to/output/book.m4b  (3.2 h, 11 chapters, 101 MB)"
+    /// "Wrote /path/to/output/book.m4b  (3.2 h, 11 chapters, 101 MB)", or a folder of MP3s
     static func wrote(_ line: String) -> URL? {
-        match(#"^Wrote (.+\.m4b)\s"#, line).map { URL(fileURLWithPath: $0[1]) }
+        match(#"^Wrote (.+?)  \("#, line).map { URL(fileURLWithPath: $0[1]) }
     }
 
     /// "  Mathers (22), Logoidal (14), ..."  from --list-unknown

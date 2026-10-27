@@ -122,19 +122,20 @@ ABBREVIATIONS = [
 ]
 
 
-def clean_paragraph(t: str, academic: bool) -> str:
+def clean_paragraph(t: str, academic: bool, keep_all=False) -> str:
     t = unicodedata.normalize("NFKC", t)  # also expands ligatures like ﬁ ﬂ
     t = t.replace("­", "")  # soft hyphen
     t = re.sub(r"[\x00-\x09\x0b-\x1f\ufffd]", "", t)  # control chars / broken glyphs from form fields
     t = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", t)  # de-hyphenate line breaks
     t = re.sub(r"\s*\n\s*", " ", t)
     t = t.replace("`", "‘")  # OCR-era backtick quotes
-    t = re.sub(r"https?://\S+|www\.\S+", "", t)
-    t = re.sub(r"\S+@\S+\.\w+", "", t)  # emails
+    if not keep_all:
+        t = re.sub(r"https?://\S+|www\.\S+", "", t)
+        t = re.sub(r"\S+@\S+\.\w+", "", t)  # emails
     # Footnote markers glued to punctuation or words: 'fact.4', 'Italia.“4', 'word¹'
     t = re.sub(r"([.,;:!?“”’\"')\]])\d{1,3}(?=\s|$)", r"\1", t)
     t = re.sub(r"[¹²³⁰-₟]+", "", t)
-    if academic:
+    if academic and not keep_all:
         t = re.sub(r"\s*\[(\d+([,–\-]\s*\d+)*)\]", "", t)  # [3], [1, 4-6]
         # (Smith, 2020), (Smith & Lee, 2019; Doe et al., 2021a), (see Smith 2020, p. 4)
         t = re.sub(
@@ -143,6 +144,7 @@ def clean_paragraph(t: str, academic: bool) -> str:
             "",
             t,
         )
+    if academic:
         for pat, rep in ABBREVIATIONS:
             t = re.sub(pat, rep, t)
     t = re.sub(r"\s+([.,;:!?])", r"\1", t)
@@ -168,7 +170,7 @@ def is_scene_break(t: str) -> bool:
 
 # --------------------------------------------------------------------------- EPUB
 
-def load_epub(path: Path, academic: bool) -> Book:
+def load_epub(path: Path, academic: bool, keep_all=False) -> Book:
     import ebooklib
     from bs4 import BeautifulSoup
     from ebooklib import epub
@@ -212,7 +214,7 @@ def load_epub(path: Path, academic: bool) -> Book:
                 stream.append(("p", txt))
 
     chapters = split_stream(stream, toc_titles=epub_toc_titles(book, stream))
-    return Book(title or path.stem, author, finalize(chapters, academic), cover)
+    return Book(title or path.stem, author, finalize(chapters, academic, keep_all), cover)
 
 
 def epub_toc_titles(book, stream):
@@ -297,7 +299,7 @@ def split_stream(stream, toc_titles):
 
 # --------------------------------------------------------------------------- PDF
 
-def load_pdf(path: Path, academic: bool) -> Book:
+def load_pdf(path: Path, academic: bool, keep_all=False) -> Book:
     import pymupdf
 
     doc = pymupdf.open(str(path))
@@ -315,19 +317,13 @@ def load_pdf(path: Path, academic: bool) -> Book:
     body_size = body_font_size(pages)
     repeated = repeated_margin_text(pages)
 
-    # Build a paragraph stream per page, dropping headers/footers/footnotes/tables.
+    # Build a paragraph stream per page, dropping headers/footers/footnotes/tables (unless keep_all).
     stream = []  # (page_no, kind, text)
     for pno, lines in enumerate(pages):
         para, last = [], None
         for ln in lines:
-            if ln["margin"] and (margin_key(ln["text"]) in repeated or is_noise_line(ln["text"])):
+            if not keep_all and is_page_furniture(ln, repeated, academic, body_size):
                 continue
-            if ln["in_table"]:
-                continue
-            if academic and ln["bottom"] and ln["size"] < body_size * 0.88:
-                continue  # footnote area
-            if academic and re.match(r"^(Figure|Fig\.|Table|Chart|Source:)\s*\d*", ln["text"]) and ln["size"] <= body_size:
-                continue  # captions
             heading = ln["size"] >= body_size * 1.15 or (ln["bold"] and len(ln["text"]) < 80 and ln["block_lines"] <= 2)
             new_para = (
                 last is None
@@ -348,7 +344,20 @@ def load_pdf(path: Path, academic: bool) -> Book:
     # Sorted by page: some PDFs list a section after one that starts later in the book.
     toc = sorted(((lvl, t, pg - 1) for lvl, t, pg in doc.get_toc() if pg >= 1), key=lambda e: e[2])
     chapters = split_pdf_by_toc(stream, toc) if len(toc) >= 2 else split_pdf_by_headings(stream, pages, body_size)
-    return Book(title, author, finalize(chapters, academic), pdf_cover(doc))
+    return Book(title, author, finalize(chapters, academic, keep_all), pdf_cover(doc))
+
+
+def is_page_furniture(ln, repeated, academic, body_size):
+    """Page numbers, running headers, table cells, footnotes and captions: not read by default."""
+    if ln["margin"] and (margin_key(ln["text"]) in repeated or is_noise_line(ln["text"])):
+        return True
+    if ln["in_table"]:
+        return True
+    if academic and ln["bottom"] and ln["size"] < body_size * 0.88:
+        return True  # footnote area
+    if academic and re.match(r"^(Figure|Fig\.|Table|Chart|Source:)\s*\d*", ln["text"]) and ln["size"] <= body_size:
+        return True  # captions
+    return False
 
 
 def extract_page_lines(page):
@@ -584,7 +593,19 @@ def is_table_label(p):
     return len(words) <= 12 and sum(bool(re.fullmatch(r"[\d.,%:/()-]+", w)) for w in words) >= max(1, len(words) / 2)
 
 
-def finalize(chapters, academic):
+def finalize(chapters, academic, keep_all=False):
+    """Cleans each chapter. keep_all ("read everything") keeps page numbers, headers, references,
+    copyright pages and the like, and only drops lines with no words in them."""
+    if keep_all:
+        out = []
+        for ch in chapters:
+            paras = [ocr_repair(c) for c in (clean_paragraph(p, academic, keep_all=True) for p in ch.paragraphs)
+                     if re.search(r"\w", c)]
+            if sum(len(p) for p in paras) >= 200 or (paras and not out):
+                out.append(Chapter(re.sub(r"\s+", " ", ch.title).strip(), paras))
+            elif paras:
+                out[-1].paragraphs += paras  # tiny fragment: fold into previous chapter
+        return out
     out = []
     # Short lines repeated all over the book are page furniture (running headers, table column labels):
     # keep the first one (often a real subheading) and drop the repeats.
@@ -620,16 +641,16 @@ def finalize(chapters, academic):
     return out
 
 
-def load_book(path: Path, academic: bool) -> Book:
+def load_book(path: Path, academic: bool, keep_all=False) -> Book:
     ext = path.suffix.lower()
     if ext == ".pdf":
-        return load_pdf(path, academic)
+        return load_pdf(path, academic, keep_all)
     if ext == ".epub":
-        return load_epub(path, academic)
+        return load_epub(path, academic, keep_all)
     if ext in (".txt", ".md"):
         text = path.read_text(errors="ignore")
         paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
-        return Book(path.stem, "", finalize(split_stream([("p", p) for p in paras], []), academic))
+        return Book(path.stem, "", finalize(split_stream([("p", p) for p in paras], []), academic, keep_all))
     sys.exit(f"Unsupported file type: {ext}")
 
 
@@ -839,7 +860,16 @@ def wav_duration(path):
     return sf.info(str(path)).duration
 
 
-def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules):
+GITHUB = "https://github.com/TechnAudioToolz/pdf-epub-to-audiobook"
+
+
+def made_with(voice, speed):
+    """Tag saying how the audio was made, saved in each file's comment."""
+    return (f"Read by the Kokoro-82M voice {voice} at {speed:g}x speed. Made with Audiobook Maker "
+            f"(free and open source): {GITHUB}")
+
+
+def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules, comment=""):
     wavs = [(i, chapter_wav(work, i, ch, rules)) for i, ch in enumerate(book.chapters, 1) if not only or i in only]
     wavs = [(i, w) for i, w in wavs if w.exists()]
     if not wavs:
@@ -850,7 +880,7 @@ def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | Non
 
     esc = lambda s: re.sub(r"([=;#\\\n])", r"\\\1", s)
     meta = [";FFMETADATA1", f"title={esc(book.title)}", f"artist={esc(book.author)}",
-            f"album={esc(book.title)}", "genre=Audiobook"]
+            f"album={esc(book.title)}", "genre=Audiobook", f"comment={esc(comment)}"]
     t = 0
     for i, w in wavs:
         d = int(wav_duration(w) * 1000)
@@ -876,6 +906,46 @@ def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | Non
     subprocess.run(cmd, check=True, cwd=work)
     hrs = t / 3_600_000
     print(f"\nWrote {out}  ({hrs:.1f} h, {len(wavs)} chapters, {out.stat().st_size/1e6:.0f} MB)")
+
+
+def package_mp3(book: Book, work: Path, out: Path, bitrate: str, only: set | None, rules, comment=""):
+    """One MP3 per chapter in the folder `out`, numbered so players keep them in order, with tags and cover."""
+    wavs = [(i, chapter_wav(work, i, ch, rules)) for i, ch in enumerate(book.chapters, 1) if not only or i in only]
+    wavs = [(i, w) for i, w in wavs if w.exists()]
+    if not wavs:
+        sys.exit("No audio was generated.")
+    partial = out.with_name(out.name + ".partial")  # an interrupted run never looks finished
+    partial.mkdir(parents=True, exist_ok=True)
+    cover = work / "cover.jpg"
+    if book.cover:
+        cover.write_bytes(book.cover)
+    digits = max(2, len(str(len(book.chapters))))
+    seconds = 0.0
+    for n, (i, w) in enumerate(wavs, 1):
+        title = book.chapters[i - 1].title
+        safe = re.sub(r'[/:\\*?"<>|]+', "", title).strip()[:80]
+        name = f"{i:0{digits}d} - {safe}.mp3"
+        print(f"  MP3 {n}/{len(wavs)}: {name}", flush=True)
+        cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-i", w.name]
+        if book.cover:
+            cmd += ["-i", cover.name, "-map", "0:a", "-map", "1:v", "-c:v", "mjpeg",
+                    "-disposition:v", "attached_pic", "-metadata:s:v", "comment=Cover (front)"]
+        else:
+            cmd += ["-map", "0:a"]
+        tags = {"title": title, "artist": book.author, "album_artist": book.author, "album": book.title,
+                "track": f"{i}/{len(book.chapters)}", "genre": "Audiobook", "comment": comment,
+                "encoded_by": "Audiobook Maker"}
+        for k, v in tags.items():
+            cmd += ["-metadata", f"{k}={v}"]
+        cmd += ["-c:a", "libmp3lame", "-b:a", bitrate, "-ac", "1", "-id3v2_version", "3", str(partial / name)]
+        subprocess.run(cmd, check=True, cwd=work)
+        seconds += wav_duration(w)
+    if out.exists():  # --force: the old folder goes to the Trash, never deleted outright
+        trash = Path.home() / ".Trash" / f"{out.name} {time.strftime('%H%M%S')}"
+        shutil.move(str(out), str(trash))
+    partial.rename(out)
+    size = sum(f.stat().st_size for f in out.iterdir())
+    print(f"\nWrote {out}  ({seconds / 3600:.1f} h, {len(wavs)} chapters as MP3 files, {size/1e6:.0f} MB)")
 
 
 # --------------------------------------------------------------------------- CLI
@@ -931,6 +1001,8 @@ def output_path(args, book, path):
     out = out.resolve()  # ffmpeg runs inside the work dir, so a relative -o would land there
     if args.chapters:
         out = out.with_name(out.stem + ".preview.m4b")
+    if args.format == "mp3":
+        out = out.with_suffix("")  # a folder of MP3s, one per chapter
     return out
 
 
@@ -963,7 +1035,7 @@ class Tee:
 
 def convert(path, args):
     """Convert one book. Returns (status, detail) where status is done / skipped / checked."""
-    book = load_book(path, academic=not args.fiction)
+    book = load_book(path, academic=not args.fiction, keep_all=args.read_all)
     book.title = args.title or book.title
     book.author = args.author or book.author
     cover = args.cover or find_cover(path)
@@ -1012,7 +1084,8 @@ def convert(path, args):
     audio.mkdir(exist_ok=True)
     synthesize(book, audio, args.voice, args.speed, lang, only, rules)
     out.parent.mkdir(parents=True, exist_ok=True)
-    package_m4b(book, audio, out, args.bitrate, only, rules)
+    package = package_mp3 if args.format == "mp3" else package_m4b
+    package(book, audio, out, args.bitrate, only, rules, made_with(args.voice, args.speed))
     return "done", out.name
 
 
@@ -1038,7 +1111,12 @@ def main():
                          "or the book's own cover)")
     ap.add_argument("--title", help="override book title (single book only)")
     ap.add_argument("--author", help="override author (single book only)")
-    ap.add_argument("--bitrate", default="64k", help="AAC bitrate (64k is plenty for mono speech)")
+    ap.add_argument("--format", choices=["m4b", "mp3"], default="m4b",
+                    help="m4b: one audiobook file with chapters (default); mp3: a folder with one MP3 per chapter")
+    ap.add_argument("--bitrate", default="64k", help="audio bitrate (64k is plenty for mono speech)")
+    ap.add_argument("--read-all", action="store_true",
+                    help="read everything on the page: page numbers, running headers, footnotes, tables, references, "
+                         "copyright pages (default: skip them)")
     ap.add_argument("--dry-run", action="store_true", help="list chapters and write cleaned text, no audio")
     ap.add_argument("--list-unknown", action="store_true",
                     help="list words Kokoro doesn't know (likely mispronounced), then stop")

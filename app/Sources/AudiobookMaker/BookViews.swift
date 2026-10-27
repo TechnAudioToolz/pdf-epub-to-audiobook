@@ -133,6 +133,10 @@ struct BookDetail: View {
                     .font(.caption).foregroundColor(.secondary)
             }
 
+            Section("Reading and file") {
+                ReadingOptions()
+            }
+
             Section("Chapters (\(book.chapters.count))") {
                 if book.state == .checking {
                     ProgressView().controlSize(.small)
@@ -180,6 +184,26 @@ struct BookDetail: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// "Read" and "Save as" menus, shared by the book panel and Settings.
+struct ReadingOptions: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Picker("Read", selection: $model.readAll) {
+            Text("The book (skip page numbers, headers, footnotes, references)").tag(false)
+            Text("Everything on the page").tag(true)
+        }
+        Picker("Save as", selection: $model.outputFormat) {
+            Text("One M4B audiobook with chapters").tag("m4b")
+            Text("MP3 files, one per chapter").tag("mp3")
+        }
+        Text(model.outputFormat == "mp3"
+             ? "MP3s play almost anywhere: a folder with one numbered file per chapter."
+             : "M4B is the audiobook format: one file with chapters, for Apple Books, BookPlayer and most audiobook apps.")
+            .font(.caption).foregroundColor(.secondary)
     }
 }
 

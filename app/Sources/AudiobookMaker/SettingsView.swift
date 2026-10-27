@@ -49,6 +49,9 @@ struct GeneralSettings: View {
                     Text("Author - Title").tag(false)
                 }
             }
+            Section("Reading and file") {
+                ReadingOptions()
+            }
             Section {
                 Toggle("Notify me when each audiobook is finished", isOn: $model.notifyWhenDone)
             }

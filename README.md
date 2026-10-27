@@ -88,7 +88,9 @@ nohup caffeinate -i .venv/bin/python audiobook.py "/path/to/My Books/" --name-fr
 | `--cover` | Cover image (single book only; queues find covers automatically) |
 | `--title`, `--author`, `-o` | Override bad metadata or the output path (single book only) |
 | `--list-unknown` | List the words Kokoro has to guess, then stop |
-| `--bitrate` | AAC bitrate, default `64k` (mono speech) |
+| `--read-all` | Read everything on the page: page numbers, running headers, footnotes, tables, references, index and copyright pages (the default skips them) |
+| `--format mp3` | A folder with one numbered MP3 per chapter (tagged, with cover) instead of one M4B |
+| `--bitrate` | Audio bitrate, default `64k` (mono speech) |
 
 ## What the cleanup does (PDF)
 
@@ -185,7 +187,7 @@ app/make_dmg.sh          # packages it as app/build/Audiobook Maker.dmg (drag-to
 - **Book panel:** drop a cover image, edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
 - **Start queue** renders the books one after another with progress. **Stop** keeps finished chapters.
 - **Donate** opens the support page.
-- **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, default voice and speed, pronunciation lists, and the tools folder.
+- **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, what to read (the book, or everything on the page), M4B or one MP3 per chapter, default voice and speed, pronunciation lists, and the tools folder.
 
 **On a Mac without this project folder**, the app sets itself up on first launch: it downloads its own Python, the libraries, ffmpeg and the voice model into `~/Library/Application Support/Audiobook Maker/` (about 1.3 GB, one time, no Homebrew needed), and saves audiobooks to `~/Audiobooks`. After that it runs offline. The same installer can be run by hand: `UV=uv ./install_engine.sh <folder>`.
 

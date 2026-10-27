@@ -93,6 +93,7 @@ nohup caffeinate -i .venv/bin/python audiobook.py "/path/to/My Books/" --name-fr
 | `--keep LIST` | Also read things the cleanup skips, comma-separated: `page-numbers`, `headers`, `footnotes`, `tables`, `captions`, `citations`, `links`, `extras` (copyright, contents, references, index, about the author). In the app these are the **Also read** checkboxes |
 | `--read-all` | Read everything on the page (all of `--keep`) |
 | `--format mp3` | A folder with one numbered MP3 per chapter (tagged, with cover) instead of one M4B |
+| `--no-chapters` | One continuous file without chapter markers (or a single MP3), for books whose chapters aren't found well. In the app: **One file, no chapter markers** above the chapter list |
 | `--bitrate` | Audio bitrate, default `64k` (mono speech) |
 
 ## What the cleanup does (PDF)

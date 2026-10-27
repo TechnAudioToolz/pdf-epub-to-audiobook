@@ -46,6 +46,8 @@ final class Book: ObservableObject, Identifiable {
     @Published var detail = ""
     @Published var output: URL?
     @Published var coverChoices: [CoverChoice] = []
+    /// One continuous file without chapter markers (for books whose chapters aren't found well).
+    @Published var oneFile = false
     @Published var loadingCoverChoices = false
     @Published var generatingCover = false
 
@@ -250,6 +252,7 @@ final class AppModel: ObservableObject {
         if !book.title.isEmpty { args += ["--title", book.title] }
         if !book.author.isEmpty { args += ["--author", book.author] }
         if let cover = book.coverURL { args += ["--cover", cover.path] }
+        if book.oneFile { args.append("--no-chapters") }
         return args
     }
 

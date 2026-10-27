@@ -146,6 +146,13 @@ struct BookDetail: View {
             }
 
             Section("Chapters (\(book.chapters.count))") {
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("One file, no chapter markers", isOn: $book.oneFile)
+                        .toggleStyle(.checkbox)
+                    Text("For books whose chapters below look wrong: the whole book is read straight through, "
+                         + (model.outputFormat == "mp3" ? "as a single MP3." : "as one M4B without chapter markers."))
+                        .font(.caption).foregroundColor(.secondary)
+                }
                 if book.state == .checking {
                     ProgressView().controlSize(.small)
                 } else if book.chapters.isEmpty {

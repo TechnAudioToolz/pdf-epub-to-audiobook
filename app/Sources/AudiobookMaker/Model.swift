@@ -17,6 +17,13 @@ enum BookState: Equatable {
     }
 }
 
+/// A candidate cover from the engine: a page of the book, its own cover, or a generated one.
+struct CoverChoice: Identifiable {
+    let url: URL
+    let label: String
+    var id: URL { url }
+}
+
 struct WordCount: Identifiable {
     let word: String
     let count: Int
@@ -38,6 +45,9 @@ final class Book: ObservableObject, Identifiable {
     @Published var progress = 0.0
     @Published var detail = ""
     @Published var output: URL?
+    @Published var coverChoices: [CoverChoice] = []
+    @Published var loadingCoverChoices = false
+    @Published var generatingCover = false
 
     init(url: URL) {
         self.url = url
@@ -176,11 +186,52 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setCover(_ url: URL, for book: Book) {
-        guard let image = NSImage(contentsOf: url) else { return }
+    func setCover(_ url: URL, for book: Book, note: String? = nil) {
+        guard let data = try? Data(contentsOf: url), let image = NSImage(data: data) else { return }
         book.cover = image
         book.coverURL = url
-        book.coverNote = "Your image: \(url.lastPathComponent)"
+        book.coverNote = note ?? "Your image: \(url.lastPathComponent)"
+    }
+
+    /// The book's first six pages (or an EPUB's own cover), for the cover picker.
+    func loadCoverChoices(_ book: Book) {
+        book.coverChoices = []
+        book.loadingCoverChoices = true
+        runCoverTool(book, ["--cover-choices", "6"]) { book.loadingCoverChoices = false }
+    }
+
+    /// Adds a cover generated from the title and author to the picker.
+    func generateCover(_ book: Book) {
+        book.coverChoices.removeAll { $0.label == "Generated" }
+        book.generatingCover = true
+        runCoverTool(book, ["--generate-cover"]) { book.generatingCover = false }
+    }
+
+    private func runCoverTool(_ book: Book, _ extra: [String], done: @escaping () -> Void) {
+        guard let engine else { return done() }
+        var args = [engine.script("audiobook.py"), book.url.path, "--no-notify"] + extra
+        if !book.title.isEmpty { args += ["--title", book.title] }
+        if !book.author.isEmpty { args += ["--author", book.author] }
+        engine.run(args, onLine: { line in
+            guard line.hasPrefix("Cover choice: ") else { return }
+            let parts = line.dropFirst("Cover choice: ".count).components(separatedBy: "\t")
+            if parts.count == 2 { book.coverChoices.append(CoverChoice(url: URL(fileURLWithPath: parts[0]), label: parts[1])) }
+        }, onExit: { _ in done() })
+    }
+
+    /// Uses an image from the clipboard (copied from a browser, Preview, a screenshot…) as the cover.
+    /// It's saved next to the book's other working files, so the render can read it. False if there's no image.
+    @discardableResult
+    func pasteCover(for book: Book) -> Bool {
+        guard let engine, let image = NSImage(pasteboard: NSPasteboard.general),
+              let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return false }
+        let folder = engine.root.appendingPathComponent("work/\(book.fileStem)/cover-choices")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("pasted-\(Int(Date().timeIntervalSince1970)).jpg")
+        guard (try? jpeg.write(to: file)) != nil else { return false }
+        setCover(file, for: book, note: "Cover: pasted image")
+        return true
     }
 
     // MARK: talking to the engine
@@ -216,6 +267,13 @@ final class AppModel: ObservableObject {
                 if book.author.isEmpty, parts.count > 1, parts[1] != "unknown author" { book.author = parts[1] }
             } else if line.contains(" chapters, ") && line.contains(" words") {
                 book.summary = line
+            } else if line.hasPrefix("Cover: "), book.coverURL == nil {
+                // where the engine's cover came from: a found image, a page of the book, or generated
+                let note = String(line.dropFirst("Cover: ".count))
+                book.coverNote = "Cover: " + note.replacingOccurrences(of: " (no cover art in the book)", with: "")
+            } else if line.hasPrefix("Cover image: "), book.coverURL == nil,
+                      let data = try? Data(contentsOf: URL(fileURLWithPath: String(line.dropFirst("Cover image: ".count)))) {
+                book.cover = NSImage(data: data)
             } else if let chapter = EngineOutput.chapter(line) {
                 book.chapters.append(chapter)
             }

@@ -83,6 +83,7 @@ struct BookDetail: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var book: Book
     @State private var coverTargeted = false
+    @State private var choosingCover = false
     @State private var fixes: [String: String] = [:]
 
     var body: some View {
@@ -90,15 +91,18 @@ struct BookDetail: View {
             Section {
                 HStack(alignment: .top, spacing: 14) {
                     VStack(spacing: 4) {
-                        Button { if let url = chooseImage() { model.setCover(url, for: book) } } label: {
+                        Button { choosingCover = true } label: {
                             CoverView(image: book.cover, width: 90)
                                 .overlay(RoundedRectangle(cornerRadius: 4)
                                     .stroke(coverTargeted ? Color.accentColor : .clear, lineWidth: 2))
                         }
                         .buttonStyle(.plain)
-                        .help("Click to choose a cover image, or drop one here")
-                        .accessibilityLabel(book.cover == nil ? "No cover. Choose an image, or drop one here."
-                                                              : "Cover image. Choose another image, or drop one here.")
+                        .help("Click to choose a cover: a page of the book, a generated one, or an image file. Or drop an image here.")
+                        .accessibilityLabel(book.cover == nil ? "No cover. Choose a cover, or drop an image here."
+                                                              : "Cover image. Choose another cover, or drop an image here.")
+                        .sheet(isPresented: $choosingCover) {
+                            CoverPicker(book: book).environmentObject(model)
+                        }
                             .onDrop(of: [.fileURL], isTargeted: $coverTargeted) { providers in
                                 loadURLs(providers) { urls in
                                     if let url = urls.first { model.setCover(url, for: book) }
@@ -188,6 +192,80 @@ struct BookDetail: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Pick a cover: one of the book's first pages, its own cover, a generated one, or any image file.
+struct CoverPicker: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var book: Book
+    @Environment(\.dismiss) private var dismiss
+    @State private var pasteFailed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose a cover").font(.title2)
+            Text("Pick one of the book's first pages, generate a cover from the title, paste an image, or choose an image file.")
+                .foregroundColor(.secondary)
+            if book.coverChoices.isEmpty && book.loadingCoverChoices {
+                ProgressView("Getting the pages…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if book.coverChoices.isEmpty && !book.generatingCover {
+                Text("No pages to show for this book. Generate a cover, paste an image, or choose a file.")
+                    .foregroundColor(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 14)], spacing: 14) {
+                        ForEach(book.coverChoices) { choice in
+                            Button {
+                                model.setCover(choice.url, for: book, note: "Cover: \(choice.label.lowercased())")
+                                dismiss()
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Image(nsImage: (try? Data(contentsOf: choice.url)).flatMap(NSImage.init(data:)) ?? NSImage())
+                                        .resizable().aspectRatio(contentMode: .fit)
+                                        .frame(height: 170)
+                                        .shadow(radius: 1)
+                                    Text(choice.label).font(.caption)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Use \(choice.label) as the cover")
+                        }
+                        if book.generatingCover {
+                            ProgressView().frame(height: 170)
+                        }
+                    }
+                    .padding(4)
+                }
+            }
+            if pasteFailed {
+                Text("There's no image on the clipboard. Copy an image first (in a browser: right-click → Copy Image).")
+                    .font(.caption).foregroundColor(.red)
+            }
+            HStack {
+                Button {
+                    model.generateCover(book)
+                } label: { Label("Generate cover", systemImage: "wand.and.stars") }
+                    .disabled(book.generatingCover || book.coverChoices.contains { $0.label == "Generated" })
+                    .help("Make a plain cover from the title and author")
+                Button {
+                    if model.pasteCover(for: book) { dismiss() } else { pasteFailed = true }
+                } label: { Label("Paste image", systemImage: "doc.on.clipboard") }
+                    .keyboardShortcut("v")
+                    .help("Use an image you copied (⌘V)")
+                Button("Choose an image file…") {
+                    if let url = chooseImage() {
+                        model.setCover(url, for: book)
+                        dismiss()
+                    }
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 660, height: 560)
+        .onAppear { model.loadCoverChoices(book) }
     }
 }
 

@@ -11,7 +11,7 @@ swift build -c release --arch arm64 -Xswiftc -target -Xswiftc arm64-apple-macos1
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/arm64-apple-macosx/release/AudiobookMaker "$APP/Contents/MacOS/AudiobookMaker"
-cp Resources/donate.html "$APP/Contents/Resources/"
+cp Resources/donate.html "$APP/Contents/Resources/"   # QR codes are embedded in it: swift make_qr.swift
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"   # redraw with: swift make_icon.swift
 
 # Everything first-launch setup needs: the tool scripts, the installer, and uv (installs Python + libraries).

@@ -7,23 +7,55 @@ struct Engine {
     var python: URL { root.appendingPathComponent(".venv/bin/python") }
     var outputFolder: URL { root.appendingPathComponent("output") }
 
+    /// Where the app installs its own copy of the tools on first launch.
+    static var supportHome: URL {
+        if let override = UserDefaults.standard.string(forKey: "engineHomeOverride") {  // testing only
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Audiobook Maker/engine")
+    }
+
+    /// True for the copy the app installed itself (as opposed to a developer's project folder).
+    var isAppInstall: Bool { root.standardizedFileURL == Engine.supportHome.standardizedFileURL }
+
     func script(_ name: String) -> String { root.appendingPathComponent(name).path }
 
-    /// A folder chosen in the app, else the folder the app was built in (app/build/ sits inside the project).
-    static func locate() -> Engine? {
+    /// In order: a folder chosen in Settings; the project folder the app was built in (app/build/ sits
+    /// inside it); the copy the app installed in Application Support. nil means first-launch setup.
+    static func locate(ignoreProject: Bool = UserDefaults.standard.bool(forKey: "ignoreProject")) -> Engine? {
         let fm = FileManager.default
-        if let saved = UserDefaults.standard.string(forKey: "enginePath"),
-           fm.fileExists(atPath: saved + "/audiobook.py") {
-            return Engine(root: URL(fileURLWithPath: saved))
-        }
-        var dir = Bundle.main.bundleURL.deletingLastPathComponent()
-        for _ in 0..<6 {
-            if fm.fileExists(atPath: dir.appendingPathComponent("audiobook.py").path) {
-                return Engine(root: dir)
+        if !ignoreProject {
+            if let saved = UserDefaults.standard.string(forKey: "enginePath"),
+               fm.fileExists(atPath: saved + "/audiobook.py") {
+                return Engine(root: URL(fileURLWithPath: saved))
             }
-            dir = dir.deletingLastPathComponent()
+            var dir = Bundle.main.bundleURL.deletingLastPathComponent()
+            for _ in 0..<6 {
+                if fm.fileExists(atPath: dir.appendingPathComponent("audiobook.py").path) {
+                    return Engine(root: dir)
+                }
+                dir = dir.deletingLastPathComponent()
+            }
+        }
+        let home = supportHome
+        if fm.fileExists(atPath: home.appendingPathComponent(".installed").path) {
+            return Engine(root: home)
         }
         return nil
+    }
+
+    /// After an app update, copy its newer tool scripts over the installed ones. The user's
+    /// pronunciation lists are never touched.
+    func refreshScripts() {
+        guard isAppInstall, let bundled = Bundle.main.url(forResource: "engine", withExtension: nil) else { return }
+        let fm = FileManager.default
+        for name in ["audiobook.py", "say.py", "voices.py", "audio2m4b.py"] {
+            let src = bundled.appendingPathComponent(name), dst = root.appendingPathComponent(name)
+            guard fm.contentsEqual(atPath: src.path, andPath: dst.path) == false else { continue }
+            try? fm.removeItem(at: dst)
+            try? fm.copyItem(at: src, to: dst)
+        }
     }
 
     var isInstalled: Bool { FileManager.default.isExecutableFile(atPath: python.path) }
@@ -39,7 +71,9 @@ struct Engine {
         process.currentDirectoryURL = root
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")  // ffmpeg, espeak-ng
+        // the installed copy's own ffmpeg first, then Homebrew (developer setups)
+        env["PATH"] = root.appendingPathComponent("bin").path + ":/opt/homebrew/bin:/usr/local/bin:"
+            + (env["PATH"] ?? "/usr/bin:/bin")
         process.environment = env
 
         let pipe = Pipe()
@@ -134,6 +168,78 @@ enum EngineOutput {
         return line.split(separator: ",").compactMap { part in
             guard let m = match(#"^\s*(.+?) \((\d+)\)$"#, String(part)), let n = Int(m[2]) else { return nil }
             return (m[1], n)
+        }
+    }
+}
+
+/// Runs the bundled install_engine.sh and reports its "STEP n/6 <what>" lines.
+@MainActor
+final class Installer: ObservableObject {
+    @Published var running = false
+    @Published var step = 0
+    @Published var steps = 6
+    @Published var stepName = ""
+    @Published var failure: String?
+    @Published var log: [String] = []
+    private var process: Process?
+
+    func install(into home: URL, finished: @escaping () -> Void) {
+        guard let engineDir = Bundle.main.url(forResource: "engine", withExtension: nil),
+              let uv = Bundle.main.url(forResource: "uv", withExtension: nil, subdirectory: "bin") else {
+            failure = "This copy of the app is missing its installer files."
+            return
+        }
+        running = true
+        failure = nil
+        step = 0
+        log = []
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = [engineDir.appendingPathComponent("install_engine.sh").path, home.path]
+        var env = ProcessInfo.processInfo.environment
+        env["UV"] = uv.path
+        env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+        p.environment = env
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        let buffer = LineBuffer()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            let lines = buffer.append(data)
+            DispatchQueue.main.async { lines.forEach(self.handle) }
+        }
+        p.terminationHandler = { proc in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            let rest = buffer.append(pipe.fileHandleForReading.readDataToEndOfFile()) + buffer.flush()
+            DispatchQueue.main.async {
+                rest.forEach(self.handle)
+                self.running = false
+                if proc.terminationStatus == 0 && self.failure == nil {
+                    finished()
+                } else if self.failure == nil {
+                    self.failure = "Setup stopped (code \(proc.terminationStatus)). Check your internet connection and try again."
+                }
+            }
+        }
+        do { try p.run(); process = p } catch {
+            running = false
+            failure = "Couldn't start setup: \(error.localizedDescription)"
+        }
+    }
+
+    func cancel() { process?.terminate() }
+
+    private func handle(_ line: String) {
+        log.append(line)
+        if log.count > 200 { log.removeFirst(log.count - 200) }
+        if let m = EngineOutput.match(#"^STEP (\d+)/(\d+) (.+)$"#, line), let n = Int(m[1]), let total = Int(m[2]) {
+            step = n
+            steps = total
+            stepName = m[3]
+        } else if line.hasPrefix("FAILED") {
+            failure = "Setup failed while \(line.dropFirst(14)). Check your internet connection and try again."
         }
     }
 }

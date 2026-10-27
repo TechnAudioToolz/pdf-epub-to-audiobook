@@ -31,6 +31,38 @@ SAMPLE_RATE = 24000
 PROJECT = Path(__file__).resolve().parent  # all output stays inside the project folder
 
 
+def ffmpeg_exe():
+    """ffmpeg from the PATH (Homebrew), else the self-contained copy that ships with imageio-ffmpeg."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def fix_espeak_data_path():
+    """espeak-ng (Kokoro's fallback for unusual words) can't open its data from a folder path longer
+    than about 160 characters, and when it fails it quits the whole program without an error. If the
+    bundled data sits deep in a long path, use a copy at a short one instead."""
+    try:
+        import espeakng_loader
+        from misaki import espeak  # noqa: F401 -- sets the default path, which we may override below
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+    except Exception:
+        return
+    data = Path(espeakng_loader.get_data_path())
+    if len(str(data)) <= 120:
+        return
+    short = Path.home() / ".cache" / "audiobook-maker-espeak-ng-data"
+    if not (short / "phontab").exists():
+        shutil.copytree(data, short, dirs_exist_ok=True)
+    EspeakWrapper.set_data_path(str(short))
+
+
 def stay_offline_if_downloaded(repo, files):
     """The model libraries check huggingface.co for updates every time they start. When the files a
     run needs are already downloaded, tell them to stay offline: nothing about your books is ever
@@ -686,6 +718,7 @@ _pipelines = {}
 def get_pipeline(lang):
     """Load the voice model once per language and reuse it for every book in a queue."""
     if lang not in _pipelines:
+        fix_espeak_data_path()
         from kokoro import KPipeline
 
         _pipelines[lang] = KPipeline(lang_code=lang, repo_id="hexgrad/Kokoro-82M", device="cpu")
@@ -758,7 +791,7 @@ def package_m4b(book: Book, work: Path, out: Path, bitrate: str, only: set | Non
         t += d
     (work / "chapters.txt").write_text("\n".join(meta) + "\n")
 
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-stats",
+    cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-stats",
            "-f", "concat", "-safe", "0", "-i", concat.name,
            "-i", "chapters.txt"]
     cover = work / "cover.jpg"
@@ -944,8 +977,8 @@ def main():
     ap.add_argument("--no-notify", action="store_true", help="no Mac notification when each book finishes")
     args = ap.parse_args()
 
-    if not shutil.which("ffmpeg"):
-        sys.exit("ffmpeg is required: brew install ffmpeg")
+    if not ffmpeg_exe():
+        sys.exit("ffmpeg is required: pip install imageio-ffmpeg (or brew install ffmpeg)")
     voices = [v.strip() for v in args.voice.split(",")]
     stay_offline_if_downloaded("hexgrad/Kokoro-82M", ["config.json", "kokoro-v1_0.pth"] + [f"voices/{v}.pt" for v in voices])
     books = expand_inputs(args.inputs)

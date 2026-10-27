@@ -9,8 +9,9 @@ struct SettingsView: View {
             VoiceSettings().tabItem { Label("Voice", systemImage: "speaker.wave.2") }
             ToolsSettings().tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
             SupportSettings().tabItem { Label("Support", systemImage: "heart") }
+            AboutView().tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 520, height: 340)
+        .frame(width: 560, height: 460)
     }
 }
 
@@ -69,7 +70,10 @@ private struct VoiceSettings: View {
                     Text("Speed")
                     Slider(value: $model.speed, in: 0.8...1.3, step: 0.05)
                     Text(String(format: "%.2f×", model.speed)).monospacedDigit().frame(width: 48)
-                }
+   
+                Text("Most audiobook players can also change the speed while you listen, so 1.0× is a safe choice.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
                 HStack {
                     Spacer()
                     Button {

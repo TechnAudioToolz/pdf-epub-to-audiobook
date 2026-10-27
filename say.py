@@ -18,7 +18,8 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-from audiobook import PROJECT, SAMPLE_RATE, apply_pronunciations, load_pronunciations, stay_offline_if_downloaded
+from audiobook import (PROJECT, SAMPLE_RATE, apply_pronunciations, fix_espeak_data_path, load_pronunciations,
+                       stay_offline_if_downloaded)
 
 
 def main():
@@ -34,6 +35,8 @@ def main():
     stay_offline_if_downloaded("hexgrad/Kokoro-82M", ["config.json", "kokoro-v1_0.pth", f"voices/{args.voice}.pt"])
     import numpy as np
     import soundfile as sf
+
+    fix_espeak_data_path()
     from kokoro import KPipeline
 
     rules = [] if args.raw else load_pronunciations(book=args.book)

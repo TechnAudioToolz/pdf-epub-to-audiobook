@@ -12,11 +12,30 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/arm64-apple-macosx/release/AudiobookMaker "$APP/Contents/MacOS/AudiobookMaker"
 cp Resources/donate.html "$APP/Contents/Resources/"
+
+# Everything first-launch setup needs: the tool scripts, the installer, and uv (installs Python + libraries).
+mkdir -p "$APP/Contents/Resources/engine" "$APP/Contents/Resources/bin"
+for f in audiobook.py say.py voices.py audio2m4b.py requirements.txt pronunciations.txt install_engine.sh; do
+  cp "../$f" "$APP/Contents/Resources/engine/"
+done
+UV_BIN="$(command -v uv || true)"
+[ -x ../.venv/bin/uv ] && UV_BIN=../.venv/bin/uv
+[ -n "$UV_BIN" ] || { echo "uv not found: run ../.venv/bin/python -m pip install uv"; exit 1; }
+cp "$UV_BIN" "$APP/Contents/Resources/bin/uv"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
-# Ad-hoc signature: runs on this Mac. Another Mac asks once:
-# System Settings > Privacy and Security > Open Anyway.
-codesign --force --deep --sign - "$APP"
+# Signature. With a self-signed "Audiobook Maker Dev" code-signing certificate in your Keychain, every
+# build carries the same identity, so firewalls like Little Snitch (and macOS) recognise rebuilds as
+# the same app. Without it, an ad-hoc signature is used, which changes on every build.
+# Another Mac asks once either way: System Settings > Privacy and Security > Open Anyway.
+SIGN_ID="${SIGN_ID:-Audiobook Maker Dev}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$SIGN_ID\""; then
+  codesign --force --deep --sign "$SIGN_ID" "$APP"
+  echo "Signed with: $SIGN_ID"
+else
+  codesign --force --deep --sign - "$APP"
+  echo "Signed ad-hoc (create a \"$SIGN_ID\" code-signing certificate for a stable identity)"
+fi
 
 echo "Built: $(pwd)/$APP"
 if [ "${1:-}" = "--open" ]; then open "$APP"; fi

@@ -164,4 +164,6 @@ app/build.sh --open      # builds "Audiobook Maker.app" into app/build/ and open
 - **Donate** opens the support page.
 - **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, default voice and speed, pronunciation lists, and the tools folder.
 
-The app is a front end only. It runs `audiobook.py` and `say.py` from the project folder it was built in, and its audiobooks go to `output/`. It's signed locally, without a paid Apple Developer account. On another Mac, the first launch is blocked once: open System Settings → Privacy and Security → Open Anyway.
+**On a Mac without this project folder**, the app sets itself up on first launch: it downloads its own Python, the libraries, ffmpeg and the voice model into `~/Library/Application Support/Audiobook Maker/` (about 1.3 GB, one time, no Homebrew needed), and saves audiobooks to `~/Audiobooks`. After that it runs offline. The same installer can be run by hand: `UV=uv ./install_engine.sh <folder>`.
+
+On a developer Mac the app is a front end only. It runs `audiobook.py` and `say.py` from the project folder it was built in, and its audiobooks go to `output/`. It's signed locally, without a paid Apple Developer account. On another Mac, the first launch is blocked once: open System Settings → Privacy and Security → Open Anyway.

@@ -11,14 +11,27 @@ struct AudiobookMakerApp: App {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 860, minHeight: 560)
-                .onAppear { handleLaunchArguments() }
+                .onAppear {
+                    model.reloadEngine()
+                    handleLaunchArguments()
+                }
                 .onOpenURL { model.add([$0]) }  // files dropped on the app's Dock icon
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                AboutMenuButton()
+            }
             CommandGroup(replacing: .help) {
                 Button("Support this project…") { openDonatePage() }
+                Button("Project on GitHub") { NSWorkspace.shared.open(projectURL) }
             }
         }
+
+        Window("About Audiobook Maker", id: "about") {
+            AboutView()
+                .frame(width: 520, height: 560)
+        }
+        .windowResizability(.contentSize)
 
         Settings {
             SettingsView()
@@ -38,6 +51,14 @@ extension AudiobookMakerApp {
             // let the dry runs read the books first
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { model.startQueue() }
         }
+    }
+}
+
+struct AboutMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("About Audiobook Maker") { openWindow(id: "about") }
     }
 }
 
@@ -69,8 +90,16 @@ struct ContentView: View {
     @State private var dropTargeted = false
 
     var body: some View {
+        if model.engine == nil {
+            SetupView()
+        } else {
+            main
+        }
+    }
+
+    private var main: some View {
         VStack(spacing: 0) {
-            if model.engine == nil || model.engine?.isInstalled == false {
+            if model.engine?.isInstalled == false {
                 engineBanner
             }
             HSplitView {

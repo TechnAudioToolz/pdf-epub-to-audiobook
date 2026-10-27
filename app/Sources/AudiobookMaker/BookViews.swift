@@ -115,6 +115,8 @@ struct BookDetail: View {
                     Slider(value: $model.speed, in: 0.8...1.3, step: 0.05)
                     Text(String(format: "%.2f×", model.speed)).monospacedDigit().frame(width: 48)
                 }
+                Text("Most audiobook players can also change the speed while you listen, so 1.0× is a safe choice.")
+                    .font(.caption).foregroundColor(.secondary)
             }
 
             Section("Chapters (\(book.chapters.count))") {

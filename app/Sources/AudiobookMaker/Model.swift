@@ -85,8 +85,14 @@ final class AppModel: ObservableObject {
 
     var selectedBook: Book? { books.first { $0.id == selection } }
 
+    /// A folder chosen in Settings; otherwise ~/Audiobooks for the app's own install, or the
+    /// project's output/ folder for a developer setup.
     var outputFolder: URL? {
-        outputPath.isEmpty ? engine?.outputFolder : URL(fileURLWithPath: outputPath)
+        if !outputPath.isEmpty { return URL(fileURLWithPath: outputPath) }
+        guard let engine else { return nil }
+        return engine.isAppInstall
+            ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Audiobooks")
+            : engine.outputFolder
     }
 
     // MARK: adding books
@@ -151,7 +157,9 @@ final class AppModel: ObservableObject {
         var args = [book.url.path, "--voice", voice, "--speed", String(format: "%.2f", speed)]
         if nameFromFile { args.append("--name-from-file") }
         if !notifyWhenDone { args.append("--no-notify") }
-        if !outputPath.isEmpty { args += ["--output-dir", outputPath] }
+        if !outputPath.isEmpty || engine?.isAppInstall == true, let folder = outputFolder {
+            args += ["--output-dir", folder.path]
+        }
         if !book.title.isEmpty { args += ["--title", book.title] }
         if !book.author.isEmpty { args += ["--author", book.author] }
         if let cover = book.coverURL { args += ["--cover", cover.path] }
@@ -282,6 +290,12 @@ final class AppModel: ObservableObject {
     func chooseEngineFolder(_ url: URL) {
         UserDefaults.standard.set(url.path, forKey: "enginePath")
         engine = Engine.locate()
+    }
+
+    /// Called after first-launch setup finishes, and at launch to pick up updated scripts.
+    func reloadEngine() {
+        engine = Engine.locate()
+        engine?.refreshScripts()
     }
 
     var statusLine: String {

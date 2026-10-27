@@ -13,3 +13,4 @@ preshed==3.0.10
 cymem==2.0.11
 murmurhash==1.0.13
 faster-whisper==1.2.1    # audio2m4b.py: hears chapter titles
+imageio-ffmpeg==0.6.0   # self-contained ffmpeg, so no Homebrew needed

@@ -121,6 +121,9 @@ final class AppModel: ObservableObject {
     }
     @Published var isRunning = false
     @Published var isPaused = false
+    /// Save and restore the list between launches (off for the README screenshots' demo books).
+    var persistQueue = UserDefaults.standard.string(forKey: "screenshots") == nil
+    var lastSavedQueue: Data?
     /// The queue, in the order things will be made (books and MP3 jobs alike). Items leave it when they start.
     @Published var queueOrder: [UUID] = []
     /// The item being made right now, and one we stopped so another could jump ahead of it.
@@ -215,6 +218,15 @@ final class AppModel: ObservableObject {
                 book.cover = page.thumbnail(of: NSSize(width: 300, height: 435), for: .mediaBox)
             }
             book.coverNote = "Looking for the cover…"
+        }
+    }
+
+    /// The finished audiobook selected in Finder; if its file isn't known (or has moved), the output folder.
+    func showCompleted(_ output: URL?) {
+        if let output, FileManager.default.fileExists(atPath: output.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([output])
+        } else if let folder = outputFolder {
+            NSWorkspace.shared.open(folder)
         }
     }
 
@@ -315,7 +327,8 @@ final class AppModel: ObservableObject {
     /// Dry run: chapters, title and author, without making audio.
     func check(_ book: Book) {
         guard let engine, !isRunning || book.state != .rendering else { return }
-        book.state = .checking
+        let finished = book.state == .done || book.state == .skipped  // restored from last time: stays finished
+        if !finished { book.state = .checking }
         book.chapters = []
         var titleLine = true
         var problem = ""

@@ -94,7 +94,7 @@ extension AppModel {
     /// Lists the chapters (one per file), title, author and cover without encoding anything.
     func checkJob(_ job: AudioJob) {
         guard let engine, job.state != .rendering else { return }
-        job.state = .checking
+        if job.state != .done { job.state = .checking }
         var tracks: [Track] = []
         var titleLine = true
         engine.run([engine.script("audio2m4b.py")] + jobArgs(job) + ["--check", "--show-paths"], onLine: { line in
@@ -278,7 +278,9 @@ struct JobsBox: View {
                             .contextMenu {
                                 QueueMenu(state: job.state, queued: job.queued, isJob: true,
                                           add: { model.addToQueue(job) }, remove: { model.takeOut(job.id) },
-                                          now: { model.renderNow(job.id) }, removeFromList: { model.removeJob(job) })
+                                          now: { model.renderNow(job.id) },
+                                          showInFinder: { model.showCompleted(job.output) },
+                                          removeFromList: { model.removeJob(job) })
                                 if let out = job.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
                                 }
@@ -531,9 +533,14 @@ struct QueueMenu: View {
     let now: () -> Void
     var checkAgain: (() -> Void)? = nil
     var clearAudio: (() -> Void)? = nil
+    var showInFinder: (() -> Void)? = nil   // finished items: the audiobook, selected in Finder
     let removeFromList: () -> Void
 
     var body: some View {
+        if let showInFinder, state == .done || state == .skipped {
+            Button("Show Completed in Finder", action: showInFinder)
+            Divider()
+        }
         if state != .rendering {
             Button("Render now (jump the queue)", action: now)
             if queued {

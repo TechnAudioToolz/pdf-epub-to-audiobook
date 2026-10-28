@@ -201,6 +201,7 @@ extension AppModel {
                 job.detail = "Converting file \(p.index) of \(p.total)"
             } else if let minutes = EngineOutput.minutesLeft(line) {
                 job.detail += " · about \(minutes) min left"
+                self?.currentSecondsLeft = Double(minutes * 60)
             } else if line.hasPrefix("Joining ") {
                 job.detail = "Joining into one M4B…"
             } else if let url = EngineOutput.wrote(line) {
@@ -280,6 +281,7 @@ struct JobsBox: View {
                                           add: { model.addToQueue(job) }, remove: { model.takeOut(job.id) },
                                           now: { model.renderNow(job.id) },
                                           showInFinder: { model.showCompleted(job.output) },
+                                          clearFinished: model.hasFinished ? { model.clearFinished() } : nil,
                                           removeFromList: { model.removeJob(job) })
                                 if let out = job.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
@@ -534,6 +536,7 @@ struct QueueMenu: View {
     var checkAgain: (() -> Void)? = nil
     var clearAudio: (() -> Void)? = nil
     var showInFinder: (() -> Void)? = nil   // finished items: the audiobook, selected in Finder
+    var clearFinished: (() -> Void)? = nil  // every finished item, off the list
     let removeFromList: () -> Void
 
     var body: some View {
@@ -556,6 +559,9 @@ struct QueueMenu: View {
         }
         Divider()
         Button("Remove from list", action: removeFromList).disabled(state == .rendering)
+        if let clearFinished {
+            Button("Clear finished books", action: clearFinished)
+        }
     }
 }
 

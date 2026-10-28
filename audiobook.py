@@ -100,7 +100,9 @@ SKIP_SECTIONS = re.compile(
     r"index( [a-z])?|notes|endnotes|published by|.*bookstore|order form|other (books|titles) by .*|"
     r"table of contents|contents|list of (figures|tables|abbreviations)|copyright|"
     r"acknowledg(e)?ments?|appendix [a-z0-9]+|appendices|about the (author|publisher)|about .*publications?|"
-    r"also by .*|further reading|the authors?|testimonials|praise for .*|this e-?book is licensed to.*|title page|cover( page)?|colophon|half title)\s*$",
+    r"also by .*|further reading|the authors?|testimonials|praise for .*|this e-?book is licensed to.*|title page|cover( page)?|colophon|half title|"
+    r"imprint|uncopyright|the project gutenberg e-?book of .*|.*full project gutenberg.* license.*|"
+    r"(start|end) of (the|this) project gutenberg e-?book.*)\s*$",
     re.I,
 )
 
@@ -203,12 +205,56 @@ def is_scene_break(t: str) -> bool:
     return bool(s) and bool(re.fullmatch(r"[\W_]{3,}", s))
 
 
-def title_and_author(title, author, path):
+def title_page_names(doc):
+    """(title, author) from the book's own title page, or (None, None) if there's no clear one (scans have
+    no text to read). The title is the run of large lines around the biggest words ("From" "Coach" "to"
+    "Awakener"), stopping at a "by" line; the author is the "by ..." line, or a name just under the title."""
+    for pno in range(min(5, len(doc))):
+        page = doc[pno]
+        if len(page.get_text("words")) > 150:
+            continue  # a page of text, not a title page
+        lines = []
+        for b in page.get_text("dict")["blocks"]:
+            for l in b.get("lines", []):
+                text = re.sub(r"\s+", " ", "".join(sp["text"] for sp in l["spans"])).strip()
+                if text and re.search(r"[A-Za-z]", text) and not re.fullmatch(r"[\d\W]+", text):
+                    lines.append((max(sp["size"] for sp in l["spans"]), text))
+        if len(lines) < 2:
+            continue
+        biggest = max(size for size, _ in lines)
+        usual = sorted(size for size, _ in lines)[len(lines) // 2]
+        if biggest < usual * 1.25 and len(lines) > 3:
+            continue
+        is_by = lambda t: re.match(r"(?i)^by\b", t)
+        stop = next((i for i, (_, t) in enumerate(lines) if is_by(t)), len(lines))
+        big = [i for i, (size, _) in enumerate(lines[:stop]) if size >= biggest * 0.9]
+        if not big:
+            continue
+        first = next(i for i, (size, _) in enumerate(lines) if size >= biggest * 0.45)
+        title = " ".join(t for size, t in lines[first:big[-1] + 1] if size >= biggest * 0.45)
+        if not 1 <= len(title.split()) <= 20 or SKIP_SECTIONS.match(title) \
+                or re.match(r"(?i)^(chapter|part|contents|table of contents|introduction|preface)\b", title):
+            continue
+        title = tidy_title(title) if title.isupper() else title
+        author = None
+        if stop < len(lines):  # "By Tony D", or "by" on its own line above the name
+            author = re.sub(r"(?i)^by\s*", "", lines[stop][1]).strip() or (lines[stop + 1][1] if stop + 1 < len(lines) else None)
+        elif big[-1] + 1 < len(lines):
+            size, t = lines[big[-1] + 1]
+            if size >= biggest * 0.45 and re.fullmatch(r"[A-Z][\w.'-]*( [A-Z][\w.'-]*){1,3}", t):
+                author = t  # a name right under the title: "Robert Dilts"
+        return title.strip(" .,:;"), author
+    return None, None
+
+
+def title_and_author(title, author, path, page_title=None, page_author=None):
     """The file's own title and author, unless they're junk (scanners leave things like "1", "Untitled" or
-    "Microsoft Word - draft.doc"); then the file name, read as "Author - Title" when it has that shape."""
+    "Microsoft Word - draft.doc"); then the file name, read as "Author - Title" when it has that shape.
+    The title page (page_title / page_author) wins when it agrees with either: it's what the book says."""
     def useful(v):
         v = re.sub(r"\s+", " ", v or "").strip()
         junk = re.match(r"(?i)^(untitled|unknown|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|"
+                        r".*\b(createspace|word templates?|template)\b.*|"
                         r"(layout|document|untitled|book|print|pages?|doc)[\s_-]*\d*|.*\.(docx?|pdf|indd|rtf|qxd|p65))$", v)
         return v if len(re.findall(r"[^\W\d_]", v)) >= 3 and not junk else ""
 
@@ -217,13 +263,26 @@ def title_and_author(title, author, path):
         stem = re.sub(r"[_]+", " ", path.stem).strip()
         left, sep, right = (part.strip() for part in stem.partition(" - "))
         if not sep:
-            return stem, author
+            left, right = "", stem
         # "Author - Title" is usual, but "Title - Author" is common too: the side that looks like a
         # person's name (2-4 words, no "of", "the", "and"...) is the author.
         name_like = lambda t: 2 <= len(t.split()) <= 4 and not any(w.lower() in SMALL_WORDS for w in t.split())
         if name_like(right) and not name_like(left):
             left, right = right, left
         title, author = right, author or left
+    if page_title:
+        # The title page wins when it agrees with the details or the file name: it's spelled out in full
+        # ("The Secrets" -> "The Secrets To Making Love Happen!"), and fixes names that were wrong.
+        def words(t):
+            return {w for w in re.findall(r"[a-z]{3,}", (t or "").lower()) if w not in SMALL_WORDS}
+        def agrees(t):
+            t = (t or "").strip()
+            return bool(t) and (len(words(t) & words(page_title)) >= 2 or (len(t) >= 4 and t.lower() in page_title.lower()))
+        if agrees(title) or agrees(path.stem.replace("_", " ")):
+            if not (title and page_title.lower() in title.lower() and len(title) > len(page_title)):
+                title = page_title  # unless the details already hold a fuller version of it
+            if page_author:
+                author = page_author
     return title, author
 
 
@@ -250,6 +309,7 @@ def load_epub(path: Path, academic: bool, keep=frozenset()) -> Book:
         for tag in soup(["script", "style", "sup", "nav"]):
             tag.decompose()
         stream.append(("doc", ""))
+        number = None  # a heading that is only a chapter number ("I"): its title is the next line
         for el in soup.find_all(["h1", "h2", "h3", "p", "div", "li", "blockquote", "hr"]):
             if el.name == "hr":
                 stream.append(("break", ""))
@@ -259,6 +319,16 @@ def load_epub(path: Path, academic: bool, keep=frozenset()) -> Book:
             txt = el.get_text(" ", strip=True)
             if not txt:
                 continue
+            if el.name in ("h1", "h2", "h3") and re.fullmatch(r"([IVXLC]+|\d{1,3})\.?", txt):
+                number = txt.rstrip(".")
+                continue
+            if number:  # Standard Ebooks: <h2>I</h2><p>Into the Primitive</p>
+                if len(txt.split()) <= 12:
+                    stream.append(("h", f"Chapter {number}: {txt}"))
+                    number = None
+                    continue
+                stream.append(("h", f"Chapter {number}"))
+                number = None
             if el.name in ("h1", "h2", "h3"):
                 stream.append(("h", txt))
             elif is_scene_break(txt):
@@ -393,7 +463,7 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
 
     doc = pymupdf.open(str(path))
     meta = doc.metadata or {}
-    title, author = title_and_author(meta.get("title"), meta.get("author"), path)
+    title, author = title_and_author(meta.get("title"), meta.get("author"), path, *title_page_names(doc))
 
     # A scan (pages that are only pictures) is spotted cheaply first, so it goes straight to text recognition
     # instead of the full layout analysis, which takes minutes on hundreds of picture pages.
@@ -1447,9 +1517,12 @@ def cover_tools(path, args):
     folder.mkdir(parents=True, exist_ok=True)
     ext = path.suffix.lower()
     title, author, own_cover, epub_pictures = None, None, None, []
+    page_names = (None, None)
     if ext == ".pdf":
-        meta = import_pymupdf().open(str(path)).metadata or {}
+        doc = import_pymupdf().open(str(path))
+        meta = doc.metadata or {}
         title, author = meta.get("title"), meta.get("author")
+        page_names = title_page_names(doc)
     elif ext == ".epub":
         from ebooklib import epub
 
@@ -1458,7 +1531,7 @@ def cover_tools(path, args):
         title, author = meta("title"), meta("creator")
         own_cover = epub_cover(book)
         epub_pictures = [i.get_content() for i in epub_images(book)]
-    title, author = title_and_author(title, author, path)
+    title, author = title_and_author(title, author, path, *page_names)
     book = Book(args.title or title, args.author or author, [], own_cover)
     if args.cover_choices:
         for f, label in cover_choices(path, book, folder, args.cover_choices, epub_pictures):

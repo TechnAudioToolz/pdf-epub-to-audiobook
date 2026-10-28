@@ -128,6 +128,8 @@ final class AppModel: ObservableObject {
     @Published var queueOrder: [UUID] = []
     /// The item being made right now, and one we stopped so another could jump ahead of it.
     var currentItem: UUID?
+    /// The item being made: its own estimate of the time left, from the engine.
+    @Published var currentSecondsLeft: Double?
     var preempted: UUID?
     /// The engine's own output while rendering (the Log panel), newest last.
     @Published var log: [String] = []
@@ -543,6 +545,7 @@ final class AppModel: ObservableObject {
     func renderNext() {
         let next: (BookState) -> Bool = { [.waiting, .ready, .checking].contains($0) }
         currentItem = nil
+        currentSecondsLeft = nil
         // the first item in the queue that can be made; anything removed from the list drops out
         queueOrder.removeAll { id in !books.contains { $0.id == id && $0.queued } && !jobs.contains { $0.id == id && $0.queued } }
         let id = queueOrder.first { id in
@@ -581,7 +584,10 @@ final class AppModel: ObservableObject {
                 // progress every ~10 seconds: one updating line, not a log entry
                 if let pct = report.bookPercent { book.progress = Double(pct) / 100 }
                 self?.liveStatus = "\(chapter) · \(report.text)"
-                if let left = report.timeLeft { book.detail = "\(chapter) · about \(left) left" }
+                if let left = report.timeLeft {
+                    book.detail = "\(chapter) · about \(left) left"
+                    self?.currentSecondsLeft = AppModel.seconds(left)
+                }
                 return
             }
             self?.appendLog(line)
@@ -591,6 +597,7 @@ final class AppModel: ObservableObject {
                 book.detail = "Chapter \(p.index) of \(p.total): \(p.title)"
             } else if let minutes = EngineOutput.minutesLeft(line) {
                 book.detail += " · about \(minutes) min left"
+                self?.currentSecondsLeft = Double(minutes * 60)
             } else if let url = EngineOutput.wrote(line) {
                 book.output = url
                 book.progress = 1
@@ -655,6 +662,7 @@ final class AppModel: ObservableObject {
         let plural = { (n: Int, word: String) in "\(n) \(word)\(n == 1 ? "" : "s")" }
         let items = jobs.isEmpty ? plural(books.count, "book") : "\(plural(books.count, "book")), \(plural(jobs.count, "MP3 job"))"
         let queued = queueOrder.count
-        return "\(items) · \(done) done · \(running) rendering · \(queued) queued"
+        let left = queueTimeLeft.map { " · about \($0) left for the queue" } ?? ""
+        return "\(items) · \(done) done · \(running) rendering · \(queued) queued\(left)"
     }
 }

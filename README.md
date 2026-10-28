@@ -17,7 +17,7 @@ On an M1 Pro it runs at about **5.5× realtime** on CPU, so a 6.6-hour book take
 - On first launch it downloads its voice engine (about 1.3 GB, one time). After that it works offline and your books never leave your Mac.
 - **No internet on that Mac, or a slow connection?** Download **`Audiobook-Maker-0.1-offline.dmg`** from the same release instead (about 660 MB). Python, the libraries and all 28 English voices are inside it, so setup takes seconds and needs no connection.
 
-Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fix any mispronounced words, and render a queue of audiobooks with chapters and covers. Everything below is the command-line version of the same tools.
+Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fix any mispronounced words, and render a queue of audiobooks with chapters and covers. Already have an audiobook as a folder of MP3s? Drop it in the **MP3 audiobooks → M4B** box and it becomes one M4B, one chapter per file. Everything below is the command-line version of the same tools.
 
 ![Audiobook Maker: a queue of books on the left, the selected book's cover, voice and chapters on the right](docs/screenshots/main-light.png)
 
@@ -26,6 +26,7 @@ Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fi
 | ![Dark mode](docs/screenshots/main-dark.png) **Dark mode** | ![First launch: setup downloads the voice engine once](docs/screenshots/first-launch.png) **First launch:** a one-time setup |
 | ![Book panel: cover, voice, chapters and words to check](docs/screenshots/book-panel.png) **Book panel:** chapters and words to check | ![Voice settings](docs/screenshots/settings-voice.png) **Settings:** voice, speed and pronunciation lists |
 | ![General settings](docs/screenshots/settings-general.png) **Settings:** where audiobooks are saved | ![About window with credits](docs/screenshots/about.png) **About:** credits for every project it builds on |
+| ![An MP3 audiobook ready to join: cover, title, author and one chapter per file](docs/screenshots/mp3-job.png) **MP3 → M4B:** a folder of MP3s, one chapter per file | |
 
 *Screenshots use public-domain books with generated covers. They're made by the app itself: `open "app/build/Audiobook Maker.app" --args -screenshots docs/screenshots`.*
 
@@ -125,7 +126,16 @@ This writes `voice_samples/index.html`, a page with a player for each voice. It 
 
 ## Existing MP3 audiobook → chaptered M4B
 
-`audio2m4b.py` converts an audiobook you already have, for example a single 14-hour MP3, into an M4B with real chapter markers. It finds the chapters itself, fully offline:
+**A folder of MP3s** (one file per chapter or part, even split into `Disc 1/`, `Disc 2/` folders) becomes one M4B with a chapter per file:
+
+```bash
+.venv/bin/python audio2m4b.py join "My Audiobook/" --check     # list chapters, title, author and cover first
+.venv/bin/python audio2m4b.py join "My Audiobook/" [--cover cover.jpg] [--title ..] [--author ..]
+```
+
+Files are joined in name order ("Part 2" before "Part 10"). Chapter names come from the files' title tags, or their file names. The title and author come from the tags or the folder name ("Author - Title"). The cover is `--cover`, else a picture inside the MP3s, else `cover.jpg` / `folder.jpg` in the folder, else a generated one. Each file is converted once and cached, so a stopped job picks up where it left off. In the app, this is the **MP3 audiobooks → M4B** box under the books.
+
+**A single long MP3:** `audio2m4b.py` converts an audiobook you already have, for example a single 14-hour MP3, into an M4B with real chapter markers. It finds the chapters itself, fully offline:
 
 ```bash
 # 1. Find chapters. It listens to the pause before each chapter with a local Whisper model.

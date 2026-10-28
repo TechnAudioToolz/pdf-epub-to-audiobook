@@ -74,6 +74,7 @@ final class AppModel: ObservableObject {
     static let bookTypes = ["pdf", "epub", "txt"]
 
     @Published var books: [Book] = []
+    @Published var jobs: [AudioJob] = []
     @Published var selection: Book.ID?
     @Published var voice = UserDefaults.standard.string(forKey: "voice") ?? "af_alloy" {
         didSet { UserDefaults.standard.set(voice, forKey: "voice") }
@@ -126,9 +127,9 @@ final class AppModel: ObservableObject {
     @Published var engine = Engine.locate()
     @Published var lastMessage = ""
 
-    private var current: Process?
+    var current: Process?
     private let speech = SpeechServer()
-    private var stopRequested = false
+    var stopRequested = false
 
     var selectedBook: Book? { books.first { $0.id == selection } }
 
@@ -145,18 +146,25 @@ final class AppModel: ObservableObject {
     // MARK: adding books
 
     func add(_ urls: [URL]) {
-        var files: [URL] = []
+        var files: [URL] = [], audio: [URL] = []
         for url in urls {
             var isDir: ObjCBool = false
             FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
             if isDir.boolValue {
                 let items = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
-                files += items.filter { Self.bookTypes.contains($0.pathExtension.lowercased()) }
+                let bookFiles = items.filter { Self.bookTypes.contains($0.pathExtension.lowercased()) }
+                if bookFiles.isEmpty && Self.containsAudio(url) {
+                    audio.append(url)  // a folder of MP3s dropped on the books: it's an MP3 job
+                }
+                files += bookFiles
                     .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             } else if Self.bookTypes.contains(url.pathExtension.lowercased()) {
                 files.append(url)
+            } else if Self.audioTypes.contains(url.pathExtension.lowercased()) {
+                audio.append(url)
             }
         }
+        if !audio.isEmpty { addAudio(audio) }
         for file in files where !books.contains(where: { $0.url == file }) {
             let book = Book(url: file)
             books.append(book)
@@ -228,15 +236,20 @@ final class AppModel: ObservableObject {
     /// It's saved next to the book's other working files, so the render can read it. False if there's no image.
     @discardableResult
     func pasteCover(for book: Book) -> Bool {
-        guard let engine, let image = NSImage(pasteboard: NSPasteboard.general),
-              let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-              let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return false }
-        let folder = engine.root.appendingPathComponent("work/\(book.fileStem)/cover-choices")
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let file = folder.appendingPathComponent("pasted-\(Int(Date().timeIntervalSince1970)).jpg")
-        guard (try? jpeg.write(to: file)) != nil else { return false }
+        guard let file = pastedImage() else { return false }
         setCover(file, for: book, note: "Cover: pasted image")
         return true
+    }
+
+    /// Saves the image on the clipboard into the engine's work folder (so the engine can read it). Nil if there's none.
+    func pastedImage() -> URL? {
+        guard let engine, let image = NSImage(pasteboard: NSPasteboard.general),
+              let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return nil }
+        let folder = engine.root.appendingPathComponent("work/pasted-covers")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("pasted-\(Int(Date().timeIntervalSince1970 * 1000)).jpg")
+        return (try? jpeg.write(to: file)) != nil ? file : nil
     }
 
     // MARK: talking to the engine
@@ -362,17 +375,21 @@ final class AppModel: ObservableObject {
         appendLog("— Resumed —")
     }
 
-    private func appendLog(_ line: String) {
+    func appendLog(_ line: String) {
         log.append(line)
         if log.count > 3000 { log.removeFirst(log.count - 3000) }
     }
 
-    private func renderNext() {
+    func renderNext() {
+        if !stopRequested, books.first(where: { [.waiting, .ready, .checking].contains($0.state) }) == nil,
+           let job = jobs.first(where: { [.waiting, .ready, .checking].contains($0.state) }) {
+            return renderJob(job)  // books first, then the MP3 jobs
+        }
         guard !stopRequested, let engine,
               let book = books.first(where: { [.waiting, .ready, .checking].contains($0.state) }) else {
             isRunning = false
             current = nil
-            let done = books.filter { $0.state == .done }.count
+            let done = books.filter { $0.state == .done }.count + jobs.filter { $0.state == .done }.count
             lastMessage = stopRequested ? "Stopped. Finished chapters are kept, so starting again resumes." : "Queue finished: \(done) done"
             return
         }
@@ -441,9 +458,11 @@ final class AppModel: ObservableObject {
     }
 
     var statusLine: String {
-        let done = books.filter { $0.state == .done || $0.state == .skipped }.count
-        let running = books.filter { $0.state == .rendering }.count
-        let waiting = books.count - done - running
-        return "\(books.count) books · \(done) done · \(running) rendering · \(waiting) waiting"
+        let states = books.map(\.state) + jobs.map(\.state)
+        let done = states.filter { $0 == .done || $0 == .skipped }.count
+        let running = states.filter { $0 == .rendering }.count
+        let plural = { (n: Int, word: String) in "\(n) \(word)\(n == 1 ? "" : "s")" }
+        let items = jobs.isEmpty ? plural(books.count, "book") : "\(plural(books.count, "book")), \(plural(jobs.count, "MP3 job"))"
+        return "\(items) · \(done) done · \(running) rendering · \(states.count - done - running) waiting"
     }
 }

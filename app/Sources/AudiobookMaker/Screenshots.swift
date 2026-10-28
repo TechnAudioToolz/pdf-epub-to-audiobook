@@ -34,6 +34,10 @@ enum Screenshots {
         let book = model.books[0]
         await render(BookDetail(book: book).environmentObject(model), size: CGSize(width: 520, height: 1180),
                      title: book.displayTitle, to: folder.appendingPathComponent("book-panel.png"))
+        if let job = model.jobs.first {
+            await render(JobDetail(job: job).environmentObject(model), size: CGSize(width: 520, height: 640),
+                         title: job.displayTitle, to: folder.appendingPathComponent("mp3-job.png"))
+        }
         await render(GeneralSettings().environmentObject(model), size: CGSize(width: 560, height: 300),
                      title: "Settings: General", to: folder.appendingPathComponent("settings-general.png"))
         await render(VoiceSettings().environmentObject(model), size: CGSize(width: 560, height: 360),
@@ -100,6 +104,15 @@ enum Screenshots {
                            "The Sounding of the Call"]
         london.unknownWords = [WordCount(word: "Sol-leks", count: 18), WordCount(word: "Dyea", count: 4),
                                WordCount(word: "Skaguay", count: 3), WordCount(word: "Perrault", count: 31)]
+        let job = AudioJob(sources: [URL(fileURLWithPath: "/Audiobooks/Meditations")])
+        job.title = "Meditations"
+        job.author = "Marcus Aurelius"
+        job.cover = cover(title: "Meditations", author: "Marcus Aurelius",
+                          color: NSColor(calibratedRed: 0.55, green: 0.20, blue: 0.24, alpha: 1))
+        job.state = .ready
+        job.summary = "12 files, 5.4 h of audio"
+        job.chapters = (1...12).map { "Book \($0)  ·  00:27:00" }
+        model.jobs = [job]
         model.selection = london.id
         model.voice = "bm_george"
         model.outputPath = "/Users/you/Audiobooks"  // a neutral path for the status bar

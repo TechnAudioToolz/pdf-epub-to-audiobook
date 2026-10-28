@@ -9,6 +9,11 @@ Step 1 - find chapters (pauses + local Whisper listening for "Chapter N ..."):
 Step 2 - build:
     python audio2m4b.py build book.mp3 [--cover cover.jpg] [--title ..] [--author ..] [--narrator ..]
   writes output/<Author> - <Title>.m4b with chapter markers and cover art.
+
+A folder of MP3s (one per chapter or part) instead:
+    python audio2m4b.py join "My Audiobook/" [--check] [--cover cover.jpg] [--title ..] [--author ..]
+  joins the files in name order into one M4B, one chapter per file, named from the files' tags or names.
+  The cover is --cover, else a picture inside the MP3s, else cover.jpg/folder.jpg in the folder, else generated.
 """
 import argparse
 import re
@@ -271,6 +276,162 @@ def build(args):
     print(f"\nWrote {out}  ({out.stat().st_size / 1e6:.0f} MB)")
 
 
+AUDIO_TYPES = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".opus", ".flac", ".wav", ".wma")
+FOLDER_COVERS = ("cover", "folder", "_folder", "front", "albumart")
+
+
+def natural_key(path):
+    """'Part 2' before 'Part 10'."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(path))]
+
+
+def audio_files(inputs):
+    """Audio files from files and folders (folders searched all the way down, e.g. Disc 1/, Disc 2/), in name order."""
+    found = []
+    for p in inputs:
+        if p.is_dir():
+            found += sorted((f for f in p.rglob("*") if f.suffix.lower() in AUDIO_TYPES and not f.name.startswith(".")),
+                            key=lambda f: natural_key(f.relative_to(p)))
+        elif p.suffix.lower() in AUDIO_TYPES:
+            found.append(p)
+    return found
+
+
+def probe(src):
+    """Duration, tags and whether there's a cover picture, from ffmpeg's own report (no ffprobe needed)."""
+    from audiobook import ffmpeg_exe
+
+    err = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", src.name], capture_output=True, text=True,
+                         cwd=src.parent).stderr
+    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", err)
+    info = {"duration": int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]) if m else 0.0,
+            "picture": bool(re.search(r"Stream #\S+.*Video:", err))}
+    head = err.split("Stream #", 1)[0]  # the file's own tags come before its streams
+    for key, value in re.findall(r"^\s{4}(\w+)\s*: (.*)$", head, re.M):
+        info.setdefault(key.lower(), value.strip())
+    return info
+
+
+def chapter_names(files, infos):
+    """Each file's title tag if they're all different, else its file name without the leading track number."""
+    titles = [i.get("title", "").strip() for i in infos]
+    if all(titles) and len(set(titles)) == len(titles):
+        return titles
+    names = []
+    for n, f in enumerate(files, 1):
+        name = re.sub(r"^[\s\d._-]*(track|part|chapter)?[\s\d._-]+(?=\D)", "", f.stem, flags=re.I).strip(" -_.")
+        names.append(name.replace("_", " ") or f"Part {n}")
+    return names
+
+
+def join_plan(args):
+    """What join will make: files, chapter names, title, author and cover."""
+    from audiobook import generated_cover, title_and_author
+
+    files = audio_files(args.inputs)
+    if not files:
+        sys.exit("No audio files found (MP3, M4A, AAC, OGG, FLAC, WAV).")
+    infos = [probe(f) for f in files]
+    for i in infos:  # one book split over discs: "Title (Disc 6)", "Title CD 2" -> "Title"
+        if i.get("album"):
+            i["album"] = re.sub(r"[\s,:_-]*[(\[]?\b(disc|disk|cd|part)\s*\d+\s*(of\s*\d+)?[)\]]?\s*$", "", i["album"], flags=re.I).strip()
+    common = lambda key: max(({i.get(key) for i in infos} - {None, ""}), key=lambda v: sum(i.get(key) == v for i in infos), default="")
+    folder = args.inputs[0] if args.inputs[0].is_dir() else files[0].parent
+    title, author = title_and_author(common("album"), common("album_artist") or common("artist"), Path(folder.name))
+    plan = dict(files=files, infos=infos, names=chapter_names(files, infos),
+                title=args.title or title, author=args.author or author)
+    # named after the source (not the title), so editing the title keeps the converted files
+    work = PROJECT / "work" / ("mp3-" + re.sub(r'[/:\\*?"<>|#]+', "", folder.name if args.inputs[0].is_dir() else files[0].stem).strip())
+    work.mkdir(parents=True, exist_ok=True)
+    plan["work"] = work
+    cover = work / "cover.jpg"
+    if args.cover:
+        cover.write_bytes(args.cover.read_bytes())
+        note = f"your image, {args.cover.name}"
+    elif any(i["picture"] for i in infos):
+        f = next(f for f, i in zip(files, infos) if i["picture"])
+        from audiobook import ffmpeg_exe
+
+        subprocess.run([ffmpeg_exe(), "-y", "-v", "error", "-i", str(f.resolve()), "-map", "0:v:0", "-frames:v", "1",
+                        str(cover)], check=True)
+        note = f"the picture inside {f.name}"
+    else:
+        pictures = sorted((p for p in folder.rglob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+                           and p.stem.lower() in FOLDER_COVERS), key=lambda p: (len(p.parts), natural_key(p)))
+        found = pictures[0] if pictures else None  # also inside Disc 1/, Disc 2/...
+        if found:
+            cover.write_bytes(found.read_bytes())
+            note = f"found {found.name}"
+        else:
+            cover.write_bytes(generated_cover(plan["title"], plan["author"]))
+            note = "generated from the title"
+    plan["cover"], plan["cover_note"] = cover, note
+    return plan
+
+
+def join(args):
+    """A folder of MP3s (or other audio) -> one M4B, one chapter per file."""
+    import time
+
+    from audiobook import GITHUB, ffmpeg_exe
+
+    plan = join_plan(args)
+    files, infos, names, work = plan["files"], plan["infos"], plan["names"], plan["work"]
+    total = sum(i["duration"] for i in infos)
+    print(f"{plan['title']} — {plan['author'] or 'unknown author'}")
+    print(f"{len(files)} files, {total / 3600:.1f} h of audio")
+    for n, (name, info) in enumerate(zip(names, infos), 1):
+        print(f"  {n:3d}. {name}\t{fmt(info['duration'])[:8]}")
+    print(f"Cover: {plan['cover_note']}")
+    print(f"Cover image: {plan['cover']}")
+    if args.check:
+        return
+
+    # Encode each file to AAC once (cached, so a stopped job resumes), then join without re-encoding.
+    parts, start, done = [], time.time(), 0.0
+    for n, (f, info) in enumerate(zip(files, infos), 1):
+        stat = f.stat()
+        part = work / f"part-{n:04d}-{stat.st_size}-{int(stat.st_mtime)}.m4a"
+        if part.exists():
+            print(f"[{n}/{len(files)}] {names[n - 1]}: cached")
+        else:
+            print(f"[{n}/{len(files)}] {names[n - 1]}", flush=True)
+            tmp = part.with_suffix(".tmp.m4a")
+            subprocess.run([ffmpeg_exe(), "-y", "-v", "error", "-i", str(f.resolve()), "-vn", "-ac", "1", "-ar", "44100",
+                            "-c:a", "aac", "-b:a", args.bitrate, str(tmp)], check=True)
+            tmp.rename(part)
+            done += info["duration"]
+            el = time.time() - start
+            left = el / done * sum(i["duration"] for i in infos[n:])  # seconds of encoding still to do
+            print(f"    done; elapsed {el / 60:.1f} min, ~{left / 60:.0f} min left", flush=True)
+        parts.append(part)
+
+    esc = lambda s: re.sub(r"([=;#\\\n])", r"\\\1", s)
+    meta = [";FFMETADATA1", f"title={esc(plan['title'])}", f"album={esc(plan['title'])}",
+            f"artist={esc(plan['author'])}", f"album_artist={esc(plan['author'])}", "genre=Audiobook",
+            f"comment={esc('Joined from ' + str(len(files)) + ' audio files with Audiobook Maker (free and open source): ' + GITHUB)}"]
+    if args.narrator:
+        meta.append(f"composer={esc(args.narrator)}")
+    t = 0
+    for part, name in zip(parts, names):
+        d = int(probe(part)["duration"] * 1000)
+        meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={t}", f"END={t + d}", f"title={esc(name)}"]
+        t += d
+    (work / "ffmetadata.txt").write_text("\n".join(meta) + "\n")
+    (work / "concat.txt").write_text("".join(f"file '{p.name}'\n" for p in parts))
+
+    name = re.sub(r'[/:\\*?"<>|]+', "", f"{plan['author']} - {plan['title']}" if plan["author"] else plan["title"]).strip()
+    out = (args.output or (args.output_dir or PROJECT / "output") / f"{name}.m4b").resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Joining {len(parts)} chapters into one M4B...", flush=True)
+    # Inside the work dir with relative names: ffmpeg misparses some absolute paths containing "#".
+    subprocess.run([ffmpeg_exe(), "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", "concat.txt",
+                    "-i", "ffmetadata.txt", "-i", "cover.jpg", "-map", "0:a", "-map", "2:v", "-c:a", "copy",
+                    "-c:v", "mjpeg", "-disposition:v", "attached_pic", "-map_metadata", "1", "-map_chapters", "1",
+                    "-movflags", "+faststart", "-f", "mp4", str(out)], check=True, cwd=work)
+    print(f"\nWrote {out}  ({t / 3_600_000:.1f} h, {len(parts)} chapters, {out.stat().st_size / 1e6:.0f} MB)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -290,8 +451,18 @@ def main():
     b.add_argument("--narrator")
     b.add_argument("--bitrate", default="64k")
     b.add_argument("-o", "--output", type=Path)
+    j = sub.add_parser("join", help="join a folder of MP3s into one M4B, one chapter per file")
+    j.add_argument("inputs", nargs="+", type=Path, help="audio files and/or folders of them")
+    j.add_argument("--check", action="store_true", help="list the chapters, title and cover, then stop")
+    j.add_argument("--cover", type=Path)
+    j.add_argument("--title")
+    j.add_argument("--author")
+    j.add_argument("--narrator")
+    j.add_argument("--bitrate", default="64k")
+    j.add_argument("--output-dir", type=Path, help="folder for the M4B (default: output/ in the project)")
+    j.add_argument("-o", "--output", type=Path)
     args = ap.parse_args()
-    (detect if args.cmd == "detect" else build)(args)
+    {"detect": detect, "build": build, "join": join}[args.cmd](args)
 
 
 if __name__ == "__main__":

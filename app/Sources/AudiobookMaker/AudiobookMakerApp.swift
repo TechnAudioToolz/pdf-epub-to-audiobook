@@ -107,8 +107,13 @@ struct ContentView: View {
                 engineBanner
             }
             HSplitView {
-                queue
-                    .frame(minWidth: 320, idealWidth: 380)
+                VSplitView {
+                    queue
+                        .frame(minHeight: 160)
+                    JobsBox()
+                        .frame(minHeight: 120, idealHeight: 200)
+                }
+                .frame(minWidth: 320, idealWidth: 380)
                 detail
                     .frame(minWidth: 400)
             }
@@ -141,7 +146,7 @@ struct ContentView: View {
                     Button { model.startQueue() } label: { Label("Start queue", systemImage: "play.fill") }
                         .keyboardShortcut("r")
                         .help("Start the queue (⌘R)")
-                        .disabled(model.books.isEmpty || model.engine == nil)
+                        .disabled((model.books.isEmpty && model.jobs.isEmpty) || model.engine == nil)
                 }
                 Button {
                     if let folder = model.outputFolder {
@@ -210,6 +215,8 @@ struct ContentView: View {
     @ViewBuilder private var detail: some View {
         if let book = model.selectedBook {
             BookDetail(book: book)
+        } else if let job = model.selectedJob {
+            JobDetail(job: job)
         } else {
             Text("Select a book to see its settings")
                 .foregroundColor(.secondary)

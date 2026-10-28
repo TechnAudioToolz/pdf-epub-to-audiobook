@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Asks GitHub for the latest release and compares it with this copy of the app. This is the only time the
-/// app itself goes online: when you click "Check for updates", or once a week if you turn that on.
+/// Asks GitHub for the latest release and compares it with this copy of the app: when you click "Check for
+/// updates", or once a week if you turn that on. Only the request for the version number is sent.
 @MainActor
 final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
@@ -100,8 +100,10 @@ struct UpdateSettings: View {
             }
             Section {
                 Toggle("Check once a week when the app opens", isOn: $updates.checkWeekly)
-                Text("Checking asks GitHub for the latest version. It's the only time the app itself goes online; "
-                     + "your books and settings are never sent. Off unless you turn it on.")
+                Text("Checking asks GitHub for the latest version number. That's all it sends: nothing about you, "
+                     + "your books or your settings. Your books are turned into audio entirely on this Mac, with the "
+                     + "voice engine kept offline, and neither this app nor anything it uses collects usage data. "
+                     + "Off unless you turn it on.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }

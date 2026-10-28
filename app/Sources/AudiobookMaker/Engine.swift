@@ -175,7 +175,7 @@ enum EngineOutput {
         return (i, n, title, cached)
     }
 
-    /// "  [p 12/340] 42% of chapter · 18% of book · about 6 h 10 min left"  (--verbose, every ~10 seconds)
+    /// "  [p 12/340] 42% of chapter · 18% of book · about 6 h 10 min left for the book"  (--verbose, every ~10 seconds)
     static func report(_ line: String) -> (text: String, bookPercent: Int?, timeLeft: String?)? {
         guard let m = match(#"^\s+\[p \d+/\d+\]\s*(.*)$"#, line) else { return nil }
         let pct = match(#"(\d+)% of book"#, m[1]).flatMap { Int($0[1]) }

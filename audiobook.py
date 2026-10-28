@@ -247,6 +247,33 @@ def title_page_names(doc):
     return None, None
 
 
+_everyday = None
+
+
+def everyday_words():
+    """The Mac's dictionary, lower-case entries only (everyday words; names are capitalised there)."""
+    global _everyday
+    if _everyday is None:
+        try:
+            _everyday = {w.strip() for w in open("/usr/share/dict/words", encoding="utf-8", errors="ignore") if w[:1].islower()}
+        except OSError:
+            _everyday = set()
+    return _everyday
+
+
+def name_score(t):
+    """How much a short phrase reads like a person's name, 0 to 1: the share of its words that aren't everyday
+    words in the Mac's dictionary ("Penney Peirce" 1, "Cartesian Logic" 0.5, "Frequency" 0). 0 for anything
+    longer than 4 words or with "of", "the", "and"..."""
+    words = re.findall(r"[^\W\d_][\w'.]*", t)
+    if not 1 <= len(words) <= 4 or any(w.lower() in SMALL_WORDS for w in words):
+        return 0.0
+    everyday = everyday_words()
+    if not everyday:  # no dictionary: the old rule, 2-4 words
+        return 1.0 if len(words) >= 2 else 0.0
+    return sum(1 for w in words if w.lower().rstrip(".") not in everyday) / len(words)
+
+
 def title_and_author(title, author, path, page_title=None, page_author=None):
     """The file's own title and author, unless they're junk (scanners leave things like "1", "Untitled" or
     "Microsoft Word - draft.doc"); then the file name, read as "Author - Title" when it has that shape.
@@ -254,9 +281,13 @@ def title_and_author(title, author, path, page_title=None, page_author=None):
     def useful(v):
         v = re.sub(r"\s+", " ", v or "").strip()
         junk = re.match(r"(?i)^(untitled|unknown|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|"
-                        r".*\b(createspace|word templates?|template)\b.*|"
-                        r"(layout|document|untitled|book|print|pages?|doc)[\s_-]*\d*|.*\.(docx?|pdf|indd|rtf|qxd|p65))$", v)
-        return v if len(re.findall(r"[^\W\d_]", v)) >= 3 and not junk else ""
+                        r".*\b(createspace|word templates?|template|lightning source|ingram|acrobat|distiller|abbyy|"
+                        r"finereader|pscript\d*|pdf ?creator|scansnap|kindle direct)\b.*|"
+                        r"(layout|document|untitled|book|print|pages?|doc)[\s_-]*\d*|"
+                        r".*\.(docx?|pdf|indd|rtf|qxd|qxp|p65|pmd|afp|e?ps|tiff?|jpe?g|png|txt|html?|xml|epub|mobi|djvu))$", v)
+        # a file path from the printer, like "2dvd-uk/9780198248255/book/9780198248255.afp"
+        path_like = v.count("/") >= 2 or ("/" in v and re.search(r"\d{6}", v))
+        return v if len(re.findall(r"[^\W\d_]", v)) >= 3 and not junk and not path_like else ""
 
     title, author = useful(title), useful(author)
     if not title:
@@ -264,10 +295,9 @@ def title_and_author(title, author, path, page_title=None, page_author=None):
         left, sep, right = (part.strip() for part in stem.partition(" - "))
         if not sep:
             left, right = "", stem
-        # "Author - Title" is usual, but "Title - Author" is common too: the side that looks like a
-        # person's name (2-4 words, no "of", "the", "and"...) is the author.
-        name_like = lambda t: 2 <= len(t.split()) <= 4 and not any(w.lower() in SMALL_WORDS for w in t.split())
-        if name_like(right) and not name_like(left):
+        # "Author - Title" is usual, but "Title - Author" is common too: the side that reads more like a
+        # person's name is the author. "Frequency - Penney Peirce" swaps; "Gaukroger - Cartesian Logic" doesn't.
+        if name_score(right) > name_score(left):
             left, right = right, left
         title, author = right, author or left
     if page_title:
@@ -485,12 +515,14 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     body_size = body_font_size(pages)
     repeated = repeated_margin_text(pages)
 
+    numbered = numbered_headings(pages)
+
     # Build a paragraph stream per page, dropping headers/footers/footnotes/tables (unless kept).
     stream = []  # (page_no, kind, text)
     for pno, lines in enumerate(pages):
         para, last = [], None
-        for ln in lines:
-            marker = chapter_marker(ln["text"])
+        for row, ln in enumerate(lines):
+            marker = chapter_marker(ln["text"]) or numbered.get((pno, row))
             if marker:
                 ln["text"] = marker  # a plain "CHAPTER 4" line is a heading, never page furniture
             elif is_page_furniture(ln, repeated, academic, body_size, keep):
@@ -501,7 +533,8 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
                               and len(ln["text"].split()) <= 12)
             ln["caps"] = caps_title
             if caps_title:
-                ln["text"] = tidy_title(ln["text"], continued=bool(last.get("caps")))
+                # (after "Chapter 9: The Immortal Breathing or", the next line carries on the title)
+                ln["text"] = drop_note_mark(tidy_title(ln["text"], continued=bool(last.get("caps") or ":" in last["text"])))
             heading = (bool(marker) or caps_title or ln["size"] >= body_size * 1.15
                        or (ln["bold"] and len(ln["text"]) < 80 and ln["block_lines"] <= 2))
             ln["marker"] = bool(marker)
@@ -523,10 +556,16 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     stream = join_cross_page_paragraphs(stream)
     # Sorted by page: some PDFs list a section after one that starts later in the book.
     toc = sorted(((lvl, t, pg - 1) for lvl, t, pg in doc.get_toc() if pg >= 1), key=lambda e: e[2])
+    toc = chapter_bookmarks(toc, len(doc))
+    if len(toc) < 2:
+        stream = section_headings_from_headers(stream, pages)
     chapters = split_pdf_by_toc(stream, toc) if len(toc) >= 2 else split_pdf_by_headings(stream, pages, body_size)
     substantial = sum(1 for c in chapters if sum(len(p.split()) for p in c.paragraphs) >= 500)
-    if len(toc) < 2 and substantial < 4:
-        # Chapter titles drawn as pictures leave no headings in the text; the running header still names the chapter.
+    named = [c.title for c in chapters if c.title not in ("Opening", "Front matter")]
+    titles_ok = sum(map(heading_like, named)) >= 0.6 * len(named) if named else False
+    if len(toc) < 2 and (substantial < 4 or not titles_ok):
+        # Chapter titles drawn as pictures leave no headings in the text, and on scans the headings found can be
+        # ordinary sentences ("Descartes moves in both cases…"); the running header still names the chapter.
         by_header = split_pdf_by_running_headers(stream, pages)
         if len(by_header) >= 4:
             chapters = by_header
@@ -547,6 +586,55 @@ def chapter_marker(text):
     if word != "chapter" and difflib.SequenceMatcher(None, word, "chapter").ratio() < 0.8:
         return None
     return f"Chapter {m.group(2).upper() if m.group(2).isalpha() else m.group(2)}"
+
+
+def numbered_heading(text):
+    """ "1 FIXING SPIRIT IN ITS ORIGINAL" (a chapter number, then its title in capitals) becomes
+    "Chapter 1: Fixing Spirit in Its Original"; anything else gives None. A title that wraps onto a next
+    line in capitals is joined on by the caller."""
+    m = re.fullmatch(r"\s*(\d{1,2})[.)]?\s+([A-Z][A-Z'’,:;&\- ]{3,}[A-Z])\s*", text)
+    if not m or len(re.findall(r"[A-Z]", m.group(2))) < 6:
+        return None
+    return f"Chapter {int(m.group(1))}: {drop_note_mark(tidy_title(m.group(2)))}"
+
+
+def drop_note_mark(t):
+    """A footnote mark read as a letter at the end of a heading: "Psychic Channelsi" -> "Psychic Channels"."""
+    words = t.split(" ")
+    w = words[-1] if words else ""
+    base = w[:-1].lower()
+    known = lambda b: b in everyday_words() or (b.endswith("s") and b[:-1] in everyday_words())  # it has no plurals
+    if len(w) > 4 and w[-1] in "iIl1¹*" and known(base) and not known(w.lower()):
+        words[-1] = w[:-1]
+    return " ".join(words)
+
+
+def numbered_headings(pages):
+    """{(page, line): "Chapter N: Title"} for chapter openings like "1 FIXING SPIRIT IN ITS ORIGINAL" near the
+    top of a page. Running headers look the same with a page number in front ("44 TAOIST YOGA"); their number
+    follows the page numbering and their text comes back, so those are left out. A page with several such
+    lines is the contents page. The chapter numbers must rise through the book (one misread number may be
+    skipped). Fewer than 3: none (it's not how this book marks its chapters)."""
+    cands = []
+    for pno, lines in enumerate(pages):
+        if any(re.fullmatch(r"\s*(table of )?contents\s*", ln["text"], re.I) for ln in lines) or sum(
+                1 for ln in lines if re.match(r"\s*\d{1,2}[.)]?\s+[A-Z][A-Z'’,:;&\- ]{3,}[A-Z]\b", ln["text"])) > 1:
+            continue  # the contents page: "1. DESCARTES AND TRADITIONAL SYLLOGISTIC", "2. … 26"
+        for row, ln in enumerate(lines[:4]):
+            heading = numbered_heading(ln["text"])
+            if heading:
+                n = int(heading.split()[1].rstrip(":"))
+                cands.append((pno, row, n, heading.split(": ", 1)[1].lower(), heading))
+    repeats = Counter(c[3] for c in cands)
+    page_offsets = {o for o, k in Counter(pno - n for pno, _, n, _, _ in cands).items() if k >= 3}
+    found, last = {}, 0
+    for pno, row, n, key, heading in cands:
+        if repeats[key] >= 2 and pno - n in page_offsets:
+            continue  # a running header with its page number
+        if last < n <= last + 2:
+            found[(pno, row)] = heading
+            last = n
+    return found if len(found) >= 3 else {}
 
 
 SMALL_WORDS = set("a an and as at but by for from in into nor of on or the to with".split())
@@ -602,7 +690,9 @@ def ocr_pages(path, count):
     work = PROJECT / "work" / path.stem
     work.mkdir(parents=True, exist_ok=True)
     st = path.stat()
-    cache = work / f"ocr-{st.st_size}-{int(st.st_mtime)}.json"
+    # "ocr2": pages read at full size. Before 2026-10-28 they were read at about a third of that (blurry), so
+    # those older ocr-*.json files are read again once and then removed.
+    cache = work / f"ocr2-{st.st_size}-{int(st.st_mtime)}.json"
     if not cache.exists():
         print(f"Scanned PDF: reading its {count} pages with the Mac's text recognition (about 3 pages a second, "
               f"saved for next time)...", flush=True)
@@ -615,6 +705,8 @@ def ocr_pages(path, count):
         if proc.wait() != 0 or not tmp.exists():
             return None
         tmp.rename(cache)
+        for old in work.glob("ocr-*.json"):
+            old.unlink()
     return [ocr_page_lines(p) for p in json.loads(cache.read_text())["pages"]]
 
 
@@ -734,7 +826,25 @@ def body_font_size(pages):
 
 
 def margin_key(t):
-    return re.sub(r"\d+", "#", t.strip().lower())
+    """ "Quick and Slow Fires 43" and "44 QUICK AND SLOW FIRES" are the same header."""
+    return re.sub(r"^(#\W*)+|(\W*#)+$", "", re.sub(r"\d+", "#", t.strip().lower())).strip() or "#"
+
+
+def same_headers(counts, min_pages=3):
+    """Maps each margin text to the header it is a copy of. Scanned pages are read with small slips
+    ("discovery and proor", "quick and slow tires"), so a text that is nearly the same as one seen on
+    min_pages+ pages counts as that one."""
+    import difflib
+
+    common = sorted((k for k, n in counts.items() if n >= min_pages and re.search(r"[a-z]{3}", k)), key=lambda k: -counts[k])
+    out = {}
+    for k in counts:
+        if k in common or not re.search(r"[a-z]{3}", k):
+            out[k] = k
+            continue
+        out[k] = next((c for c in common if abs(len(c) - len(k)) <= max(3, len(c) // 6)
+                       and difflib.SequenceMatcher(None, k, c).ratio() >= 0.85), k)
+    return out
 
 
 def repeated_margin_text(pages):
@@ -742,8 +852,12 @@ def repeated_margin_text(pages):
     for lines in pages:
         c.update({margin_key(l["text"]) for l in lines if l["margin"]})
     # Running headers often change per chapter (the story title), so any margin text seen on
-    # 3+ pages counts, not just text repeated across the whole book.
-    return {k for k, n in c.items() if n >= 3}
+    # 3+ pages counts, not just text repeated across the whole book (and its misread copies).
+    same = same_headers(c)
+    pages_with = Counter()
+    for k, n in c.items():
+        pages_with[same[k]] += n
+    return {k for k in c if pages_with[same[k]] >= 3}
 
 
 def join_cross_page_paragraphs(stream):
@@ -761,6 +875,59 @@ def join_cross_page_paragraphs(stream):
         else:
             out.append((pno, kind, txt))
     return out
+
+
+def section_headings_from_headers(stream, pages):
+    """On scans the "PREFACE" or "INDEX" at the top of a page is also that section's running header, so it's
+    dropped as page furniture and the section never starts on its own: a preface vanishes into the title
+    pages before it, an index gets read out. Puts the heading back on the page where that header first
+    appears (front matter in the first part of the book, back matter in the last part)."""
+    front = ("preface", "foreword", "introduction", "prologue", "translator's introduction")
+    back = ("glossary", "index", "bibliography", "references", "notes", "endnotes")
+    first, count = {}, Counter()
+    for pno, lines in enumerate(pages):
+        for k in {margin_key(l["text"]) for l in lines if l["margin"]} & set(front + back):
+            count[k] += 1
+            first.setdefault(k, pno)
+    have = {norm_title(t) for _, kind, t in stream if kind == "h"}
+    starts = sorted((p, k) for k, p in first.items() if count[k] >= 2 and k not in have
+                    and (p <= len(pages) * 0.35 if k in front else p >= len(pages) * 0.6))
+    out = []
+    for item in stream:
+        while starts and item[0] >= starts[0][0]:
+            pno, k = starts.pop(0)
+            out.append((pno, "h", k.title()))
+        out.append(item)
+    return out
+
+
+def heading_like(t):
+    """A chapter title, not a sentence: short, starts with a capital or number, doesn't stop mid-phrase,
+    and is in capitals or Title Case ("The Natural Light of Reason", "CHAPTER 3", "Chapter 2: Methods")."""
+    t = re.sub(r"\s+", " ", t).strip()
+    words = t.split()
+    if not words or len(words) > 12 or len(t) > 90 or not re.match(r"[\"“'(]?[A-Z0-9]", t):
+        return False
+    if t.endswith((",", ";", "-")) or words[-1].lower() in SMALL_WORDS:
+        return False
+    if MAJOR_HEADING.match(t) or t.isupper():
+        return True
+    big = [w for w in words if w.lower() not in SMALL_WORDS and re.match(r"[^\W\d_]", w)]
+    return bool(big) and sum(w[0].isupper() for w in big) >= 0.6 * len(big)
+
+
+def chapter_bookmarks(toc, page_count):
+    """Scanners and converters often bookmark every page ("Image 0013", "000007.pdf", "Page 12", "scan0004");
+    those aren't chapters. Drops them, and the whole list when they're most of it, so chapters are found
+    from the text instead. Bare numbers ("1", "2") only count as page labels when there's about one per page."""
+    def page_label(t):
+        t = re.sub(r"(?i)\.(pdf|jpe?g|png|tiff?|gif|bmp|jp2|djvu)$", "", t.strip())
+        bare = not re.search(r"[^\W\d_]", t)
+        t = re.sub(r"(?i)\b(image|img|page|pg|p|scan|picture|pic|photo|dsc|file|seite|bild)(?=[\W\d_]|$)", "", t)
+        return not re.search(r"[^\W\d_]", t) and (not bare or len(toc) > page_count / 3)
+
+    kept = [e for e in toc if not page_label(e[1])]
+    return kept if len(kept) >= len(toc) / 2 else []
 
 
 def split_pdf_by_toc(stream, toc):
@@ -834,16 +1001,19 @@ def split_pdf_by_running_headers(stream, pages):
     chapter), for PDFs whose chapter titles are pictures. A header seen across much of the book is the
     book's own title and is ignored."""
     first, last, title = {}, {}, {}
-    for pno, lines in enumerate(pages):
+    tops = [[ln for ln in lines if ln["margin"] and not ln["bottom"]] for lines in pages]
+    key_of = lambda ln: re.sub(r"[“”]", '"', margin_key(ln["text"])).strip("# ")
+    same = same_headers(Counter(key_of(ln) for lines in tops for ln in lines), min_pages=2)
+    for pno, lines in enumerate(tops):
         for ln in lines:
-            if not ln["margin"] or ln["bottom"]:
-                continue
-            key = re.sub(r"[“”]", '"', margin_key(ln["text"])).strip("# ")
+            key = same[key_of(ln)]
             if not re.search(r"[a-z]{3}", key):
                 continue  # page numbers
             first.setdefault(key, pno)
             last[key] = pno
-            title.setdefault(key, re.sub(r"^\d+\s+|\s+\d+$", "", ln["text"].strip()))
+            if key == key_of(ln) or key not in title:  # the header's own spelling, not a misread copy
+                t = re.sub(r"^\d+\s+|\s+\d+$", "", ln["text"].strip())
+                title[key] = tidy_title(t) if t.isupper() else t
     keys = sorted((k for k in first if first[k] != last[k] and last[k] - first[k] < len(pages) * 0.3), key=first.get)
     if len(keys) < 4:
         return []
@@ -1532,7 +1702,7 @@ def cover_tools(path, args):
         own_cover = epub_cover(book)
         epub_pictures = [i.get_content() for i in epub_images(book)]
     title, author = title_and_author(title, author, path, *page_names)
-    book = Book(args.title or title, args.author or author, [], own_cover)
+    book = Book(args.title or title, author if args.author is None else args.author, [], own_cover)
     if args.cover_choices:
         for f, label in cover_choices(path, book, folder, args.cover_choices, epub_pictures):
             print(f"Cover choice: {f}\t{label}")
@@ -1550,7 +1720,8 @@ def convert(path, args):
     keep = set(KEEP_CHOICES) if args.read_all else {k.strip() for k in (args.keep or "").split(",") if k.strip()}
     book = load_book(path, academic=not args.fiction, keep=frozenset(keep))
     book.title = args.title or book.title
-    book.author = args.author or book.author
+    if args.author is not None:  # "" means no author, on purpose
+        book.author = args.author
     cover = args.cover or find_cover(path)
     if cover:
         book.cover = cover.read_bytes()
@@ -1633,7 +1804,7 @@ def main():
     ap.add_argument("--generate-cover", action="store_true",
                     help="write a cover generated from the title and author to work/<book>/cover-choices, then stop")
     ap.add_argument("--title", help="override book title (single book only)")
-    ap.add_argument("--author", help="override author (single book only)")
+    ap.add_argument("--author", help='override author (single book only); "" for none')
     ap.add_argument("--format", choices=["m4b", "mp3"], default="m4b",
                     help="m4b: one audiobook file with chapters (default); mp3: a folder with one MP3 per chapter")
     ap.add_argument("--no-chapters", action="store_true",

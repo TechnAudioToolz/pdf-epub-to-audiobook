@@ -123,3 +123,30 @@ struct KeepAwakeButton: View {
                 + "The screen can still turn off. (Closing a laptop's lid still puts it to sleep.)")
     }
 }
+
+// MARK: book log (temporary, for testing; see TODO.md)
+
+extension AppModel {
+    static var bookLog: URL { queueFile.deletingLastPathComponent().appendingPathComponent("books-log.txt") }
+
+    /// One line per event in books-log.txt, next to the saved list: when, what happened, the book's file, and
+    /// what the app made of it (title, author, chapters; or where the audiobook went; or what went wrong).
+    /// Tab-separated, so it reads as plain text and opens as a spreadsheet. Stays on this Mac.
+    func logBook(_ event: String, _ file: URL, _ detail: String = "") {
+        guard persistQueue else { return }  // not for screenshot runs
+        let format = DateFormatter()
+        format.dateFormat = "yyyy-MM-dd HH:mm:ss"  // this Mac's local time
+        let stamp = format.string(from: Date())
+        let line = [stamp, event, file.path, detail.replacingOccurrences(of: "\t", with: " ")]
+            .joined(separator: "\t") + "\n"
+        let url = Self.bookLog
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data(("when\tevent\tfile\tdetails\n" + line).utf8).write(to: url)
+        }
+    }
+}

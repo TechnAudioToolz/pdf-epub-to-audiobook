@@ -36,6 +36,10 @@ final class Book: ObservableObject, Identifiable {
     let url: URL
     @Published var title = ""
     @Published var author = ""
+    /// The user typed (or cleared) the title or author: checks don't fill them in again, and a cleared
+    /// title means the file name, a cleared author means none.
+    var titleEdited = false
+    var authorEdited = false
     @Published var cover: NSImage?
     @Published var coverURL: URL?          // an image the user dropped on the cover box
     @Published var coverNote = ""
@@ -183,6 +187,7 @@ final class AppModel: ObservableObject {
         for file in files where !books.contains(where: { $0.url == file }) {
             let book = Book(url: file)
             books.append(book)
+            logBook("added", file)
             findCover(book)
             check(book)
         }
@@ -244,6 +249,8 @@ final class AppModel: ObservableObject {
         book.coverURL = nil
         book.title = ""
         book.author = ""
+        book.titleEdited = false
+        book.authorEdited = false
         book.unknownWords = []
         if book.state != .done { book.state = .waiting }
         findCover(book)
@@ -275,9 +282,7 @@ final class AppModel: ObservableObject {
 
     private func runCoverTool(_ book: Book, _ extra: [String], done: @escaping () -> Void) {
         guard let engine else { return done() }
-        var args = [engine.script("audiobook.py"), book.url.path, "--no-notify"] + extra
-        if !book.title.isEmpty { args += ["--title", book.title] }
-        if !book.author.isEmpty { args += ["--author", book.author] }
+        let args = [engine.script("audiobook.py"), book.url.path, "--no-notify"] + extra + nameArgs(book)
         engine.run(args, onLine: { line in
             guard line.hasPrefix("Cover choice: ") else { return }
             let parts = line.dropFirst("Cover choice: ".count).components(separatedBy: "\t")
@@ -307,6 +312,15 @@ final class AppModel: ObservableObject {
 
     // MARK: talking to the engine
 
+    /// The title and author for the engine: what's in the boxes; a title cleared on purpose is the file name
+    /// (what the list shows), an author cleared on purpose is none. Empty and untouched: the engine finds them.
+    private func nameArgs(_ book: Book) -> [String] {
+        var args: [String] = []
+        if !book.title.isEmpty || book.titleEdited { args += ["--title", book.displayTitle] }
+        if !book.author.isEmpty || book.authorEdited { args += ["--author", book.author] }
+        return args
+    }
+
     private func commonArgs(_ book: Book) -> [String] {
         var args = [book.url.path, "--voice", voice, "--speed", String(format: "%.2f", speed)]
         if nameFromFile { args.append("--name-from-file") }
@@ -318,8 +332,7 @@ final class AppModel: ObservableObject {
         if !outputPath.isEmpty || engine?.isAppInstall == true, let folder = outputFolder {
             args += ["--output-dir", folder.path]
         }
-        if !book.title.isEmpty { args += ["--title", book.title] }
-        if !book.author.isEmpty { args += ["--author", book.author] }
+        args += nameArgs(book)
         if let cover = book.coverURL { args += ["--cover", cover.path] }
         if book.oneFile { args.append("--no-chapters") }
         if book.remake { args.append("--force") }
@@ -345,8 +358,8 @@ final class AppModel: ObservableObject {
             if titleLine, line.contains(" — ") {
                 titleLine = false
                 let parts = line.components(separatedBy: " — ")
-                if book.title.isEmpty { book.title = parts[0] }
-                if book.author.isEmpty, parts.count > 1, parts[1] != "unknown author" { book.author = parts[1] }
+                if book.title.isEmpty, !book.titleEdited { book.title = parts[0] }
+                if book.author.isEmpty, !book.authorEdited, parts.count > 1, parts[1] != "unknown author" { book.author = parts[1] }
             } else if line.contains(" chapters, ") && line.contains(" words") {
                 book.summary = line
             } else if line.hasPrefix("Cover: "), book.coverURL == nil {
@@ -364,6 +377,9 @@ final class AppModel: ObservableObject {
             if book.state == .checking {
                 book.state = status == 0 ? .ready : .failed(problem.isEmpty ? "Couldn't read this file." : problem)
             }
+            self?.logBook(status == 0 ? "checked" : "check failed", book.url,
+                          status == 0 ? "\(book.displayTitle) — \(book.author.isEmpty ? "no author" : book.author) · \(book.summary)"
+                                      : problem)
         })
     }
 
@@ -631,9 +647,11 @@ final class AppModel: ObservableObject {
                 book.remake = false
                 book.state = .done
                 book.detail = book.output?.lastPathComponent ?? "Done"
+                self?.logBook("made", book.url, book.output?.path ?? "")
             } else {
                 book.state = .failed(lastError)
                 book.detail = lastError.isEmpty ? "Something went wrong" : lastError
+                self?.logBook("failed", book.url, lastError)
             }
             self?.isPaused = false
             self?.liveStatus = ""

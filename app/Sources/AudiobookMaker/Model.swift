@@ -123,6 +123,8 @@ final class AppModel: ObservableObject {
     /// The latest progress report ("Chapter 7 of 38 · 42% of chapter · 18% of book · about 6 h left"),
     /// shown as one line at the bottom of the Log that updates in place.
     @Published var liveStatus = ""
+    /// While a book is being checked: "Checking The Circuit of Force: page 120 of 244 (49%)".
+    @Published var checkStatus = ""
     @Published var showLog = UserDefaults.standard.bool(forKey: "showLog") {
         didSet { UserDefaults.standard.set(showLog, forKey: "showLog") }
     }
@@ -281,10 +283,13 @@ final class AppModel: ObservableObject {
         book.chapters = []
         var titleLine = true
         var problem = ""
-        engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--dry-run", "--no-notify"], onLine: { line in
+        engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--dry-run", "--no-notify", "--verbose"],
+                   onLine: { [weak self] line in
             if let reason = EngineOutput.problem(line) { problem = reason }
-            if let m = EngineOutput.match(#"^OCR page (\d+)/(\d+)"#, line) {
-                book.summary = "Scanned book: reading page \(m[1]) of \(m[2]) (once; it's saved)…"
+            if let m = EngineOutput.match(#"^(OCR|Reading) page (\d+)/(\d+)"#, line), let n = Double(m[2]), let total = Double(m[3]) {
+                let what = m[1] == "OCR" ? "reading scanned page" : "page"
+                self?.checkStatus = "Checking \(book.displayTitle): \(what) \(m[2]) of \(m[3]) (\(Int(n / total * 100))%)"
+                if m[1] == "OCR" { book.summary = "Scanned book: reading page \(m[2]) of \(m[3]) (once; it's saved)…" }
             }
             if titleLine, line.contains(" — ") {
                 titleLine = false
@@ -303,7 +308,8 @@ final class AppModel: ObservableObject {
             } else if let chapter = EngineOutput.chapter(line) {
                 book.chapters.append(chapter)
             }
-        }, onExit: { status in
+        }, onExit: { [weak self] status in
+            if self?.checkStatus.hasPrefix("Checking \(book.displayTitle)") == true { self?.checkStatus = "" }
             if book.state == .checking {
                 book.state = status == 0 ? .ready : .failed(problem.isEmpty ? "Couldn't read this file." : problem)
             }

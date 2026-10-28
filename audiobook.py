@@ -1380,12 +1380,16 @@ def expand_inputs(paths):
 
 
 def find_cover(book_path):
-    """covers/<book>.*, then an image next to the book (<book>.jpg, <book>-Cover.jpg, cover.jpg, folder.jpg)."""
+    """covers/<book>.*, then an image next to the book (<book>.jpg, <book>-Cover.jpg; cover.jpg or folder.jpg
+    only if the folder holds just this one book)."""
     stem = book_path.stem.strip()
     for ext in IMAGE_TYPES:
         if (PROJECT / "covers" / f"{stem}{ext}").exists():
             return PROJECT / "covers" / f"{stem}{ext}"
-    for name in (stem, f"{stem}-Cover", f"{stem} cover", "cover", "folder"):
+    # cover.jpg / folder.jpg belong to a folder, so they only count when the folder holds just this book
+    books_here = sum(1 for f in book_path.parent.iterdir() if f.suffix.lower() in BOOK_TYPES and not f.name.startswith("."))
+    generic = ("cover", "folder") if books_here <= 1 else ()
+    for name in (stem, f"{stem}-Cover", f"{stem} cover") + generic:
         for ext in IMAGE_TYPES:
             for f in (book_path.with_name(name + ext), book_path.with_name(name + ext.upper())):
                 if f.exists():

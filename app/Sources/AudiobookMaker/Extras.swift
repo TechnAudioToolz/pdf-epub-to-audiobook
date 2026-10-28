@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Foundation
 
 extension AppModel {
@@ -82,5 +83,43 @@ extension AppModel {
         guard total > 60 else { return nil }
         let minutes = Int(total / 60)
         return minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(minutes) min"
+    }
+}
+
+// MARK: keep awake
+
+/// The coffee cup in the toolbar: while it's on, the Mac doesn't go to sleep on its own, so long queues keep
+/// going when you walk away. The screen can still turn off. Off again each time the app opens.
+@MainActor
+final class KeepAwake: ObservableObject {
+    static let shared = KeepAwake()
+    private var activity: NSObjectProtocol?
+
+    @Published var isOn = false {
+        didSet {
+            guard isOn != oldValue else { return }
+            if isOn {
+                activity = ProcessInfo.processInfo.beginActivity(
+                    options: [.idleSystemSleepDisabled], reason: "Audiobook Maker: keeping the Mac awake")
+            } else if let activity {
+                ProcessInfo.processInfo.endActivity(activity)
+                self.activity = nil
+            }
+        }
+    }
+}
+
+struct KeepAwakeButton: View {
+    @ObservedObject var keepAwake = KeepAwake.shared
+
+    var body: some View {
+        Toggle(isOn: $keepAwake.isOn) {
+            Label(keepAwake.isOn ? "Keeping awake" : "Keep awake",
+                  systemImage: keepAwake.isOn ? "cup.and.saucer.fill" : "cup.and.saucer")
+        }
+        .help(keepAwake.isOn
+              ? "The Mac won't sleep while Audiobook Maker is open. Click to let it sleep again."
+              : "Keep the Mac awake while Audiobook Maker is open, so audiobooks keep being made when you walk away. "
+                + "The screen can still turn off. (Closing a laptop's lid still puts it to sleep.)")
     }
 }

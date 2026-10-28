@@ -24,6 +24,8 @@ struct AudiobookMakerApp: App {
                 AboutMenuButton()
             }
             CommandGroup(replacing: .help) {
+                Button("Try an Example Book…") { model.tryExampleBook() }
+                Divider()
                 Button("Support this project…") { openDonatePage() }
                 Button("Project on GitHub") { NSWorkspace.shared.open(projectURL) }
             }
@@ -188,6 +190,9 @@ struct ContentView: View {
                     Text("Drop books here").font(.title3)
                     Text("PDF, EPUB or TXT files, or a folder of them").foregroundColor(.secondary)
                     Button("Add books…") { model.add(chooseBooks()) }
+                    Button("Try an example book") { model.tryExampleBook() }
+                        .buttonStyle(.link)
+                        .help("Downloads a free public-domain classic to try the app with")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -207,6 +212,7 @@ struct ContentView: View {
                                           checkAgain: { model.checkFromScratch(book) },
                                           clearAudio: { model.checkFromScratch(book, audio: true) },
                                           showInFinder: { model.showCompleted(book.output) },
+                                          clearFinished: model.hasFinished ? { model.clearFinished() } : nil,
                                           removeFromList: { model.remove(book) })
                                 if let out = book.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }

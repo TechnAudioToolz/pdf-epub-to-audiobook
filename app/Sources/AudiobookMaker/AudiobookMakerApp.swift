@@ -13,6 +13,7 @@ struct AudiobookMakerApp: App {
                 .frame(minWidth: 860, minHeight: 560)
                 .onAppear {
                     model.reloadEngine()
+                    model.restoreQueue()  // the books and MP3 jobs from last time
                     handleLaunchArguments()
                     UpdateChecker.shared.checkIfDue(model)  // only if weekly checks are turned on
                 }
@@ -205,6 +206,7 @@ struct ContentView: View {
                                           now: { model.renderNow(book.id) },
                                           checkAgain: { model.checkFromScratch(book) },
                                           clearAudio: { model.checkFromScratch(book, audio: true) },
+                                          showInFinder: { model.showCompleted(book.output) },
                                           removeFromList: { model.remove(book) })
                                 if let out = book.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }

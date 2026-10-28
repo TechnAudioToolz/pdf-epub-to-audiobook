@@ -29,6 +29,26 @@ Drag in PDFs, EPUBs or text files, check the chapters, pick one of 28 voices, fi
 
 *Screenshots use public-domain books with generated covers. They're made by the app itself: `open "app/build/Audiobook Maker.app" --args -screenshots docs/screenshots`.*
 
+## Free books to try
+
+Public-domain books are free to download, convert and share. These libraries are good places to start:
+
+| Library | What's there | Best format for this app |
+|---|---|---|
+| [Project Gutenberg](https://www.gutenberg.org) | The biggest free library: 70,000+ classics, no account needed | **EPUB** ("EPUB3 (E-readers incl. Send-to-Kindle)") |
+| [Standard Ebooks](https://standardebooks.org) | A smaller set of classics, carefully proofread and formatted, with good covers | **EPUB** (the cleanest results) |
+| [Internet Archive](https://archive.org/details/texts) | Millions of scanned books, including rare and out-of-print ones | **PDF**; scans are read with the Mac's text recognition |
+| [Wikisource](https://wikisource.org) | Volunteer-transcribed texts, including historical documents and many languages | **EPUB** (the "Download" link on each work) |
+| [HathiTrust](https://www.hathitrust.org) | Research-library scans; "Full view" books are public domain | **PDF** (scans) |
+| [Faded Page](https://www.fadedpage.com) | Books that are public domain in Canada, proofread by volunteers | **EPUB** (check it's public domain where you live) |
+| [Internet Sacred Text Archive](https://sacred-texts.com) | 1,200+ texts on religion, mythology, folklore and the esoteric | Pages are HTML: save the text, or find the same title on Gutenberg or the Internet Archive |
+| [LibriVox](https://librivox.org) | Free *human-read* audiobooks of public-domain books | Already MP3s: drop the folder in the **MP3 audiobooks → M4B** box for one chaptered M4B |
+
+Tips:
+- **Pick EPUB when you can.** It has real chapters and clean text, so it converts best. PDFs work too; scanned PDFs take a few extra minutes for text recognition.
+- **"Public domain" depends on the country.** A book that's free in Canada may still be under copyright in the US, and the other way round. These sites say where their books are free.
+- **Rare texts:** the Internet Archive and HathiTrust are the places for old and unusual books that were never reprinted.
+
 ## Install the command-line tools (macOS, Apple Silicon)
 
 ```bash

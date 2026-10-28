@@ -58,12 +58,14 @@ struct GeneralSettings: View {
             }
             Section {
                 Picker("Make at once", selection: $model.booksAtOnce) {
-                    Text("One book").tag(1)
-                    Text("Two books").tag(2)
+                    ForEach(1...AppModel.maxBooksAtOnce, id: \.self) { n in
+                        Text(n == 1 ? "One book" : "\(["", "", "Two", "Three", "Four"][n]) books").tag(n)
+                    }
                 }
             } footer: {
-                Text("Two at once can finish a queue sooner: one book doesn't keep every core busy. "
-                     + "Each book takes a little longer, and the Mac works harder.")
+                Text("This Mac: \(AppModel.performanceCores) performance cores, \(AppModel.memoryGB) GB of memory, "
+                     + "so up to \(AppModel.maxBooksAtOnce) at once. One book doesn't keep every core busy, so more at "
+                     + "once can finish a queue sooner; each book takes a little longer, and the Mac works harder.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }

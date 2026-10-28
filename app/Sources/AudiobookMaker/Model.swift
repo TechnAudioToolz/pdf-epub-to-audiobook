@@ -124,7 +124,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(outputFormat, forKey: "outputFormat") }
     }
     /// 1, or 2 to make two books at once (each gets half the CPU's performance cores).
-    @Published var booksAtOnce = max(1, UserDefaults.standard.integer(forKey: "booksAtOnce")) {
+    @Published var booksAtOnce = min(max(1, UserDefaults.standard.integer(forKey: "booksAtOnce")), AppModel.maxBooksAtOnce) {
         didSet { UserDefaults.standard.set(booksAtOnce, forKey: "booksAtOnce"); if isRunning { renderNext() } }
     }
     static let performanceCores: Int = {
@@ -132,6 +132,10 @@ final class AppModel: ObservableObject {
         return sysctlbyname("hw.perflevel0.physicalcpu", &n, &size, nil, 0) == 0 && n > 0
             ? Int(n) : ProcessInfo.processInfo.activeProcessorCount
     }()
+    static let memoryGB = Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
+    /// One book keeps about 4 performance cores busy and uses 1-2 GB of memory, so: one book per 4 performance
+    /// cores (rounded), at least 2 (two small renders still share a Mac well), at most 4, and no more than one per 4 GB.
+    static let maxBooksAtOnce = max(1, min(4, max(2, (performanceCores + 2) / 4), memoryGB / 4))
     @Published var isRunning = false
     @Published var isPaused = false
     /// Save and restore the list between launches (off for the README screenshots' demo books).
@@ -618,7 +622,7 @@ final class AppModel: ObservableObject {
         var chapter = ""
         appendLog("=== \(book.displayTitle) ===")
         var args = [engine.script("audiobook.py")] + commonArgs(book) + ["--verbose"]
-        if booksAtOnce > 1 { args += ["--threads", "\(max(1, Self.performanceCores / booksAtOnce))"] }
+        if booksAtOnce > 1 { args += ["--threads", "\(max(2, Self.performanceCores / booksAtOnce))"] }
         let tag = booksAtOnce > 1 ? "[\(book.displayTitle.prefix(24))] " : ""
         return engine.run(args, onLine: { [weak self] line in
             if let m = EngineOutput.match(#"^(OCR|Reading) page (\d+)/(\d+)"#, line) {

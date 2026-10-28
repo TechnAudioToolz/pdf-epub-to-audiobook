@@ -40,6 +40,12 @@ enum Screenshots {
                      title: "Settings: General", to: folder.appendingPathComponent("settings-general.png"))
         await render(VoiceSettings().environmentObject(model), size: CGSize(width: 560, height: 360),
                      title: "Settings: Voice", to: folder.appendingPathComponent("settings-voice.png"))
+        // what "Check for updates" shows when there's a newer version (a sample, nothing is fetched)
+        UpdateChecker.shared.status = .available(version: "0.2.0", name: "Audiobook Maker 0.2",
+            notes: "**New:** scanned books, MP3 → M4B, a clear queue with Render now.", page: projectURL)
+        await render(UpdateSettings(), size: CGSize(width: 560, height: 400),
+                     title: "Settings: Updates", to: folder.appendingPathComponent("settings-updates.png"))
+        UpdateChecker.shared.status = .idle
         await render(SetupView().environmentObject(model), size: CGSize(width: 640, height: 460),
                      title: "Audiobook Maker", to: folder.appendingPathComponent("first-launch.png"))
         await render(AboutView(), size: CGSize(width: 520, height: 600),

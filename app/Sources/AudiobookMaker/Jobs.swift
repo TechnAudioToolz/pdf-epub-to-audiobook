@@ -71,6 +71,7 @@ extension AppModel {
         for sources in groups where !jobs.contains(where: { $0.sources == sources }) {
             let job = AudioJob(sources: sources)
             jobs.append(job)
+            logBook("added MP3 job", sources[0], sources.count > 1 ? "\(sources.count) files" : "")
             checkJob(job)
             if selection == nil { selection = job.id }
         }
@@ -224,9 +225,11 @@ extension AppModel {
             } else if status == 0 {
                 job.state = .done
                 job.detail = job.output?.lastPathComponent ?? "Done"
+                self?.logBook("made MP3 job", job.sources[0], job.output?.path ?? "")
             } else {
                 job.state = .failed(lastError)
                 job.detail = lastError.isEmpty ? "Something went wrong" : lastError
+                self?.logBook("MP3 job failed", job.sources[0], lastError)
             }
             self?.isPaused = false
             self?.renderNext()

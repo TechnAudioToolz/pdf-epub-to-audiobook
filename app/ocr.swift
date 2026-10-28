@@ -23,7 +23,8 @@ var done = 0
 DispatchQueue.concurrentPerform(iterations: count) { i in
     autoreleasepool {
         guard let page = CGPDFDocument(url as CFURL)?.page(at: i + 1) else { return }
-        let box = page.getBoxRect(.mediaBox)
+        // The crop box is the page as viewers show it (the media box can be a bigger sheet around it).
+        let box = page.getBoxRect(.cropBox)
         let rotated = page.rotationAngle % 180 != 0
         let w = rotated ? box.height : box.width, h = rotated ? box.width : box.height
         let scale: CGFloat = 2.5  // about 180 dpi: plenty for book text, and quick
@@ -33,7 +34,10 @@ DispatchQueue.concurrentPerform(iterations: count) { i in
                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) {
             ctx.setFillColor(CGColor(gray: 1, alpha: 1))
             ctx.fill(CGRect(x: 0, y: 0, width: pw, height: ph))
-            ctx.concatenate(page.getDrawingTransform(.mediaBox, rect: CGRect(x: 0, y: 0, width: pw, height: ph),
+            // getDrawingTransform only ever shrinks a page, never enlarges it, so scale first, then let it
+            // place and rotate the page in a rect of the page's own size.
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(x: 0, y: 0, width: w, height: h),
                                                      rotate: 0, preserveAspectRatio: true))
             ctx.drawPDFPage(page)
             if let image = ctx.makeImage() {

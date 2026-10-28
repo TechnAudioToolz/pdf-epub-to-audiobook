@@ -9,6 +9,8 @@ struct SavedQueue: Codable {
         var isJob = false
         var title = ""
         var author = ""
+        var titleEdited: Bool?         // typed or cleared by the user (missing in older files)
+        var authorEdited: Bool?
         var cover: String?             // an image the user chose
         var oneFile = false
         var finished: String?          // "done" or "skipped"
@@ -35,7 +37,9 @@ extension AppModel {
             state == .done ? "done" : state == .skipped ? "skipped" : nil
         }
         let books = self.books.map { b in
-            SavedQueue.Item(paths: [b.url.path], title: b.title, author: b.author, cover: b.coverURL?.path,
+            SavedQueue.Item(paths: [b.url.path], title: b.title, author: b.author,
+                            titleEdited: b.titleEdited ? true : nil, authorEdited: b.authorEdited ? true : nil,
+                            cover: b.coverURL?.path,
                             oneFile: b.oneFile, finished: finished(b.state), output: b.output?.path,
                             queuePosition: position(b.id, rendering: b.state == .rendering))
         }
@@ -91,6 +95,8 @@ extension AppModel {
                 let book = Book(url: urls[0])
                 book.title = item.title
                 book.author = item.author
+                book.titleEdited = item.titleEdited ?? false
+                book.authorEdited = item.authorEdited ?? false
                 book.oneFile = item.oneFile
                 if let finishedState { book.state = finishedState }
                 book.output = item.output.map { URL(fileURLWithPath: $0) }

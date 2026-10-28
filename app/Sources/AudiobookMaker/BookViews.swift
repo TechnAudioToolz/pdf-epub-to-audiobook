@@ -146,9 +146,13 @@ struct BookDetail: View {
                         Text("Click or drop a cover").font(.caption2).foregroundColor(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        TextField("Title", text: $book.title, prompt: Text("Book title"))
+                        TextField("Title", text: Binding(get: { book.title },
+                                                         set: { if $0 != book.title { book.title = $0; book.titleEdited = true } }),
+                                  prompt: Text(book.titleEdited ? book.fileStem : "Book title"))
                             .textFieldStyle(.roundedBorder)
-                        TextField("Author", text: $book.author, prompt: Text("Author"))
+                        TextField("Author", text: Binding(get: { book.author },
+                                                          set: { if $0 != book.author { book.author = $0; book.authorEdited = true } }),
+                                  prompt: Text(book.authorEdited ? "No author" : "Author"))
                             .textFieldStyle(.roundedBorder)
                         Text(book.coverNote).font(.caption).foregroundColor(.secondary)
                         if !book.summary.isEmpty {

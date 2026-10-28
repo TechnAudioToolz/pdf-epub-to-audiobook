@@ -1446,12 +1446,16 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
         ch_chars, ch_done, last_report = sum(len(p) for p in spoken_paras) or 1, 0, 0.0
         for n, p in enumerate(spoken_paras, 1):
             if verbose and (n == 1 or time.time() - last_report >= 10):
-                # every ~10 seconds: "  [p 12/340] 42% of chapter · 18% of book · about 6 h 10 min left"
+                # every ~10 seconds: "  [p 12/340] 42% of chapter · 18% of book · about 6 h 10 min left for the book"
                 last_report = time.time()
                 book_done = done_chars + len(ch.text) * ch_done / ch_chars
                 pct_book = 100 * book_done / max(total_chars, 1)
                 el, made = time.time() - start, made_chars + len(ch.text) * ch_done / ch_chars
-                eta = f" · about {duration_words(el / made * (total_chars - book_done))} left" if el > 30 and made else ""
+                # Time left for the whole book: from this run's measured speed once there's a minute of it,
+                # until then from the book's length (about 15 characters a second of speech, made about
+                # 5x faster than real time).
+                left = (el / made if el > 60 and made else 1 / (15 * speed * 5)) * (total_chars - book_done)
+                eta = f" · about {duration_words(left)} left for the book"
                 print(f"  [p {n}/{len(spoken_paras)}] {100 * ch_done / ch_chars:.0f}% of chapter · "
                       f"{pct_book:.0f}% of book{eta}", flush=True)
             ch_done += len(p)

@@ -601,7 +601,7 @@ final class AppModel: ObservableObject {
                 if let pct = report.bookPercent { book.progress = Double(pct) / 100 }
                 self?.liveStatus = "\(chapter) · \(report.text)"
                 if let left = report.timeLeft {
-                    book.detail = "\(chapter) · about \(left) left"
+                    book.detail = "\(chapter) · about \(left) left for the book"
                     self?.currentSecondsLeft = AppModel.seconds(left)
                 }
                 return

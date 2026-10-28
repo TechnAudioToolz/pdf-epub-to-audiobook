@@ -14,6 +14,7 @@ struct AudiobookMakerApp: App {
                 .onAppear {
                     model.reloadEngine()
                     handleLaunchArguments()
+                    UpdateChecker.shared.checkIfDue(model)  // only if weekly checks are turned on
                 }
                 .onOpenURL { model.add([$0]) }  // files dropped on the app's Dock icon
         }

@@ -8,6 +8,7 @@ struct SettingsView: View {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "speaker.wave.2") }
             ToolsSettings().tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+            UpdateSettings().tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             SupportSettings().tabItem { Label("Support", systemImage: "heart") }
             AboutView().tabItem { Label("About", systemImage: "info.circle") }
         }

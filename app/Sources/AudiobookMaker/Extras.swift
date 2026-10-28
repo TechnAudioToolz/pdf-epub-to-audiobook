@@ -70,16 +70,19 @@ extension AppModel {
         return h + m > 0 ? h * 3600 + m * 60 : nil
     }
 
-    /// The current item's time left, plus estimates for everything queued: books from their length at about
+    /// The time left of what's being made, plus estimates for everything queued: books from their length at about
     /// 5x faster than real time, MP3 jobs at about 100x. Nil when nothing is running.
     var queueTimeLeft: String? {
         guard isRunning else { return nil }
         let hours = { (summary: String) in EngineOutput.match(#"([\d.]+) h of audio"#, summary).flatMap { Double($0[1]) } ?? 0 }
-        var total = currentSecondsLeft ?? 0
+        var total = secondsLeft.values.reduce(0, +)
         for id in queueOrder {
             if let book = books.first(where: { $0.id == id }) { total += hours(book.summary) * 3600 / 5 / speed }
             if let job = jobs.first(where: { $0.id == id }) { total += hours(job.summary) * 3600 / 100 }
         }
+        // side by side, the work is shared out, but it can't finish before the longest item being made
+        let slots = Double(max(1, min(booksAtOnce, making.count + queueOrder.count)))
+        total = max(total / slots, secondsLeft.values.max() ?? 0)
         guard total > 60 else { return nil }
         let minutes = Int(total / 60)
         return minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(minutes) min"

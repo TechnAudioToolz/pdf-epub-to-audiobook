@@ -1827,7 +1827,12 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="every ~10 seconds, print how far into the chapter and book it is, and the time left")
     ap.add_argument("--no-notify", action="store_true", help="no Mac notification when each book finishes")
+    ap.add_argument("--threads", type=int, help="CPU threads for the voice (the app sets this when making two books at once)")
     args = ap.parse_args()
+    if args.threads:
+        import torch
+
+        torch.set_num_threads(max(1, args.threads))
     global PROGRESS
     PROGRESS = args.verbose
     unknown = {k.strip() for k in (args.keep or "").split(",") if k.strip()} - set(KEEP_CHOICES)

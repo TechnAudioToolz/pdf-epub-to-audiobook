@@ -224,6 +224,7 @@ app/make_dmg.sh          # a small DMG whose app downloads its engine on first l
 - **Start queue** renders the books one after another with progress. **Pause** (⌘P) freezes the render, using no CPU, until **Resume**. **Stop** keeps finished chapters.
 - **No sleep mode** (the coffee cup, top right) stops the Mac going to sleep on its own while the app is open, so a long queue keeps going when you walk away. The screen can still turn off. `--keep-awake` at launch does the same.
 - **Right-click** a book: Render now (jump the queue), Show Completed in Finder, Check again from scratch, Clear finished books. The status bar shows the time left for the whole queue.
+- **Two books at once** (Settings → General → Make at once): one book doesn't keep every core busy, so making two side by side can finish a queue sooner. Each book takes a little longer on its own.
 - **Verbose mode** (the three lines, ⌘L) shows what the engine is doing: each chapter as it starts and finishes, plus one live line with how far into the chapter and the book it is and the time left, updated about every 10 seconds (`--verbose` on the command line).
 - **Donate** opens the support page.
 - **Updates** (Settings → Updates): **Check for updates** asks GitHub for the latest version number and offers the download; a weekly check can be turned on. Only that request is sent: nothing about you, your books or your settings. Books are turned into audio entirely on your Mac with the voice engine kept offline, and neither the app nor anything it uses collects usage data.

@@ -123,6 +123,15 @@ final class AppModel: ObservableObject {
     @Published var outputFormat = UserDefaults.standard.string(forKey: "outputFormat") ?? "m4b" {
         didSet { UserDefaults.standard.set(outputFormat, forKey: "outputFormat") }
     }
+    /// 1, or 2 to make two books at once (each gets half the CPU's performance cores).
+    @Published var booksAtOnce = max(1, UserDefaults.standard.integer(forKey: "booksAtOnce")) {
+        didSet { UserDefaults.standard.set(booksAtOnce, forKey: "booksAtOnce"); if isRunning { renderNext() } }
+    }
+    static let performanceCores: Int = {
+        var n: Int32 = 0, size = MemoryLayout<Int32>.size
+        return sysctlbyname("hw.perflevel0.physicalcpu", &n, &size, nil, 0) == 0 && n > 0
+            ? Int(n) : ProcessInfo.processInfo.activeProcessorCount
+    }()
     @Published var isRunning = false
     @Published var isPaused = false
     /// Save and restore the list between launches (off for the README screenshots' demo books).
@@ -130,23 +139,24 @@ final class AppModel: ObservableObject {
     var lastSavedQueue: Data?
     /// The queue, in the order things will be made (books and MP3 jobs alike). Items leave it when they start.
     @Published var queueOrder: [UUID] = []
-    /// The item being made right now, and one we stopped so another could jump ahead of it.
-    var currentItem: UUID?
-    /// The item being made: its own estimate of the time left, from the engine.
-    @Published var currentSecondsLeft: Double?
-    var preempted: UUID?
+    /// The items being made right now, oldest first, and their engine processes.
+    @Published var making: [UUID] = []
+    var processes: [UUID: Process] = [:]
+    /// Each item being made: its own estimate of the time left, from the engine.
+    @Published var secondsLeft: [UUID: Double] = [:]
+    /// Items we stopped so another could jump ahead of them.
+    var preempted: Set<UUID> = []
     /// The engine's own output while rendering (the Log panel), newest last.
     @Published var log: [String] = []
-    /// The latest progress report ("Chapter 7 of 38 · 42% of chapter · 18% of book · about 6 h left"),
-    /// shown as one line at the bottom of the Log that updates in place.
-    @Published var liveStatus = ""
+    /// The latest progress report of each item being made ("Chapter 7 of 38 · 42% of chapter · 18% of book ·
+    /// about 6 h left"), shown as one line each at the bottom of the Log that updates in place.
+    @Published var liveStatus: [UUID: String] = [:]
     /// While a book is being checked: "Checking The Circuit of Force: page 120 of 244 (49%)".
     @Published var checkStatus = ""
     @Published var showLog = false  // the Log starts closed each time; ⌘L opens it
     @Published var engine = Engine.locate()
     @Published var lastMessage = ""
 
-    var current: Process?
     private let speech = SpeechServer()
     var stopRequested = false
 
@@ -463,7 +473,7 @@ final class AppModel: ObservableObject {
     /// The title of whatever comes just before this item in the queue (or is being made now).
     func queuedBefore(_ id: UUID) -> String? {
         guard let i = queueOrder.firstIndex(of: id) else { return nil }
-        let before = i == 0 ? currentItem : queueOrder[i - 1]
+        let before = i == 0 ? making.last : queueOrder[i - 1]
         return books.first { $0.id == before }?.displayTitle ?? jobs.first { $0.id == before }?.displayTitle
     }
 
@@ -493,17 +503,18 @@ final class AppModel: ObservableObject {
         jobs.first { $0.id == id }?.queued = false
     }
 
-    /// Jump the queue: this item is made next. If something else is being made, it stops (its finished
-    /// chapters are kept), this one starts, and the stopped one carries on straight after.
+    /// Jump the queue: this item is made next. If every slot is busy, the newest item being made stops (its
+    /// finished chapters are kept), this one starts, and the stopped one carries on straight after.
     func renderNow(_ id: UUID) {
-        guard id != currentItem else { return }
+        guard !making.contains(id) else { return }
         if let book = books.first(where: { $0.id == id }) { makeReady(&book.state); book.queued = true }
         if let job = jobs.first(where: { $0.id == id }) { makeReady(&job.state); job.queued = true }
         enqueue(id, at: 0)
-        if isRunning, let running = currentItem, current?.isRunning == true {
-            preempted = running
+        if isRunning, making.count >= booksAtOnce, let newest = making.last, let process = processes[newest],
+           process.isRunning {
+            preempted.insert(newest)
             if isPaused { resume() }
-            current?.terminate()  // its exit handler puts it back in the queue right after this one
+            process.terminate()  // its exit handler puts it back in the queue right after this one
         } else {
             runQueue()
         }
@@ -511,14 +522,14 @@ final class AppModel: ObservableObject {
 
     /// The exit handlers' share of a jump: put the stopped item back, second in line.
     func requeueAfterJump(_ id: UUID) {
-        preempted = nil
+        preempted.remove(id)
         enqueue(id, at: 1)
     }
 
-    /// Starts working through the queue, unless it already is (then new items are picked up in turn).
+    /// Starts working through the queue, or fills a free slot if it already is (new items are picked up in turn).
     func runQueue() {
-        guard !isRunning else { return }
-        lastMessage = ""
+        guard !isPaused, !(isRunning && stopRequested) else { return }
+        if !isRunning { lastMessage = "" }
         isRunning = true
         stopRequested = false
         renderNext()
@@ -527,30 +538,38 @@ final class AppModel: ObservableObject {
     func stop() {
         stopRequested = true
         if isPaused { resume() }  // a stopped process can't act on terminate until it runs again
-        current?.terminate()
+        processes.values.forEach { $0.terminate() }
     }
 
-    /// Freezes the render where it is (the engine process is suspended, so it uses no CPU) until Resume.
+    /// Freezes the render where it is (the engine processes are suspended, so they use no CPU) until Resume.
     func pause() {
-        guard let process = current, process.isRunning, !isPaused else { return }
-        kill(process.processIdentifier, SIGSTOP)
+        let live = processes.values.filter(\.isRunning)
+        guard !live.isEmpty, !isPaused else { return }
+        live.forEach { kill($0.processIdentifier, SIGSTOP) }
         isPaused = true
-        if let book = books.first(where: { $0.state == .rendering }) { book.detail = "Paused · " + book.detail }
-        if let job = jobs.first(where: { $0.state == .rendering }) { job.detail = "Paused · " + job.detail }
+        books.filter { $0.state == .rendering }.forEach { $0.detail = "Paused · " + $0.detail }
+        jobs.filter { $0.state == .rendering }.forEach { $0.detail = "Paused · " + $0.detail }
         appendLog("— Paused —")
     }
 
     func resume() {
-        guard let process = current, isPaused else { return }
-        kill(process.processIdentifier, SIGCONT)
+        guard isPaused else { return }
+        processes.values.forEach { kill($0.processIdentifier, SIGCONT) }
         isPaused = false
-        if let book = books.first(where: { $0.state == .rendering }) {
-            book.detail = book.detail.replacingOccurrences(of: "Paused · ", with: "")
-        }
-        if let job = jobs.first(where: { $0.state == .rendering }) {
-            job.detail = job.detail.replacingOccurrences(of: "Paused · ", with: "")
-        }
+        books.filter { $0.state == .rendering }.forEach { $0.detail = $0.detail.replacingOccurrences(of: "Paused · ", with: "") }
+        jobs.filter { $0.state == .rendering }.forEach { $0.detail = $0.detail.replacingOccurrences(of: "Paused · ", with: "") }
         appendLog("— Resumed —")
+        renderNext()  // a slot may have opened up while paused
+    }
+
+    /// An item's engine process has ended: free its slot and start whatever's next.
+    func finished(_ id: UUID) {
+        making.removeAll { $0 == id }
+        processes[id] = nil
+        secondsLeft[id] = nil
+        liveStatus[id] = nil
+        if making.isEmpty { isPaused = false }
+        renderNext()
     }
 
     func appendLog(_ line: String) {
@@ -558,62 +577,74 @@ final class AppModel: ObservableObject {
         if log.count > 3000 { log.removeFirst(log.count - 3000) }
     }
 
+    /// Starts the next items in the queue until every slot (Books at once) is busy; ends the run when nothing's left.
     func renderNext() {
         let next: (BookState) -> Bool = { [.waiting, .ready, .checking].contains($0) }
-        currentItem = nil
-        currentSecondsLeft = nil
-        // the first item in the queue that can be made; anything removed from the list drops out
+        // anything removed from the list drops out of the queue
         queueOrder.removeAll { id in !books.contains { $0.id == id && $0.queued } && !jobs.contains { $0.id == id && $0.queued } }
-        let id = queueOrder.first { id in
-            books.contains { $0.id == id && next($0.state) } || jobs.contains { $0.id == id && next($0.state) }
-        }
-        if !stopRequested, let id, let job = jobs.first(where: { $0.id == id }) {
+        // two copies of one book (same file name) share a work folder, so never make them side by side
+        let busyStems = Set(books.filter { making.contains($0.id) }.map(\.fileStem))
+        while !stopRequested, !isPaused, making.count < booksAtOnce, let engine, let id = queueOrder.first(where: { id in
+            jobs.contains { $0.id == id && next($0.state) }
+                || books.contains { $0.id == id && next($0.state) && !busyStems.contains($0.fileStem) }
+        }) {
             queueOrder.removeAll { $0 == id }
-            currentItem = id
-            return renderJob(job)
+            making.append(id)
+            if let job = jobs.first(where: { $0.id == id }) {
+                processes[id] = renderJob(job, engine: engine)
+            } else if let book = books.first(where: { $0.id == id }) {
+                processes[id] = renderBook(book, engine: engine)
+            }
         }
-        guard !stopRequested, let engine, let id, let book = books.first(where: { $0.id == id }) else {
+        if making.isEmpty {
+            let wasRunning = isRunning
             isRunning = false
-            current = nil
+            isPaused = false
             let done = books.filter { $0.state == .done }.count + jobs.filter { $0.state == .done }.count
-            lastMessage = stopRequested ? "Stopped. Finished chapters are kept, so starting again resumes." : "Queue finished: \(done) done"
-            return
+            if wasRunning {
+                lastMessage = stopRequested ? "Stopped. Finished chapters are kept, so starting again resumes." : "Queue finished: \(done) done"
+            }
         }
+    }
+
+    /// Makes one book; its exit handler frees the slot.
+    private func renderBook(_ book: Book, engine: Engine) -> Process {
         book.state = .rendering
         book.queued = false
-        queueOrder.removeAll { $0 == book.id }
-        currentItem = book.id
         book.progress = 0
         book.detail = "Starting…"
         var skipped = false
         var lastError = ""
         var chapter = ""
         appendLog("=== \(book.displayTitle) ===")
-        current = engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--verbose"], onLine: { [weak self] line in
+        var args = [engine.script("audiobook.py")] + commonArgs(book) + ["--verbose"]
+        if booksAtOnce > 1 { args += ["--threads", "\(max(1, Self.performanceCores / booksAtOnce))"] }
+        let tag = booksAtOnce > 1 ? "[\(book.displayTitle.prefix(24))] " : ""
+        return engine.run(args, onLine: { [weak self] line in
             if let m = EngineOutput.match(#"^(OCR|Reading) page (\d+)/(\d+)"#, line) {
                 // reading the book before the voice starts: the updating line, not the Log
-                self?.liveStatus = "Reading \(book.displayTitle): page \(m[2]) of \(m[3])"
+                self?.liveStatus[book.id] = "Reading \(book.displayTitle): page \(m[2]) of \(m[3])"
                 book.detail = "Reading the book: page \(m[2]) of \(m[3])"
                 return
             }
             if let report = EngineOutput.report(line) {
                 // progress every ~10 seconds: one updating line, not a log entry
                 if let pct = report.bookPercent { book.progress = Double(pct) / 100 }
-                self?.liveStatus = "\(chapter) · \(report.text)"
+                self?.liveStatus[book.id] = tag + "\(chapter) · \(report.text)"
                 if let left = report.timeLeft {
                     book.detail = "\(chapter) · about \(left) left for the book"
-                    self?.currentSecondsLeft = AppModel.seconds(left)
+                    self?.secondsLeft[book.id] = AppModel.seconds(left)
                 }
                 return
             }
-            self?.appendLog(line)
+            self?.appendLog(tag + line)
             if let p = EngineOutput.progress(line) {
                 chapter = "Chapter \(p.index) of \(p.total)"
                 book.progress = Double(p.cached ? p.index : p.index - 1) / Double(p.total)
                 book.detail = "Chapter \(p.index) of \(p.total): \(p.title)"
             } else if let minutes = EngineOutput.minutesLeft(line) {
                 book.detail += " · about \(minutes) min left"
-                self?.currentSecondsLeft = Double(minutes * 60)
+                self?.secondsLeft[book.id] = Double(minutes * 60)
             } else if let url = EngineOutput.wrote(line) {
                 book.output = url
                 book.progress = 1
@@ -630,7 +661,7 @@ final class AppModel: ObservableObject {
                 lastError = line
             }
         }, onExit: { [weak self] status in
-            if self?.preempted == book.id {
+            if self?.preempted.contains(book.id) == true {
                 book.state = .ready
                 book.queued = true
                 book.detail = "Paused for another book; carries on next"
@@ -653,9 +684,7 @@ final class AppModel: ObservableObject {
                 book.detail = lastError.isEmpty ? "Something went wrong" : lastError
                 self?.logBook("failed", book.url, lastError)
             }
-            self?.isPaused = false
-            self?.liveStatus = ""
-            self?.renderNext()
+            self?.finished(book.id)
         })
     }
 

@@ -266,7 +266,8 @@ struct JobsBox: View {
                     ForEach(model.jobsInOrder) { job in
                         JobRow(job: job, position: model.queuePosition(job.id),
                                move: { model.moveInQueue(job.id, by: $0) },
-                               isLastInQueue: model.queuePosition(job.id) == model.queueOrder.count)
+                               isLastInQueue: model.queuePosition(job.id) == model.queueOrder.count,
+                               paused: model.isPaused)
                             .tag(job.id)
                             .contentShape(Rectangle())
                             .onDrop(of: [.fileURL], isTargeted: nil) { providers in  // more files for this job
@@ -301,6 +302,7 @@ struct JobRow: View {
     var position: Int? = nil
     var move: ((Int) -> Void)? = nil
     var isLastInQueue = false
+    var paused = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -316,7 +318,7 @@ struct JobRow: View {
             }
             Spacer()
             if let position, let move { QueueArrows(position: position, isLast: isLastInQueue, move: move) }
-            StateBadge(state: job.state, queued: job.queued, position: position)
+            StateBadge(state: job.state, queued: job.queued, position: position, paused: paused)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
@@ -385,6 +387,7 @@ struct JobDetail: View {
 
             Section {
                 QueueButton(state: job.state, queued: job.queued, position: model.queuePosition(job.id),
+                            paused: model.isPaused, resume: { model.resume() },
                             after: model.queuedBefore(job.id),
                             add: { model.addToQueue(job) }, remove: { model.takeOut(job.id) },
                             now: { model.renderNow(job.id) })
@@ -464,6 +467,8 @@ struct QueueButton: View {
     let state: BookState
     let queued: Bool
     var position: Int? = nil
+    var paused = false
+    var resume: () -> Void = {}
     var after: String? = nil      // what's made just before it (or is being made now)
     let add: () -> Void
     let remove: () -> Void
@@ -478,6 +483,11 @@ struct QueueButton: View {
     var body: some View {
         HStack {
             switch state {
+            case .rendering where paused:
+                Label("Paused", systemImage: "pause.circle.fill")
+                    .foregroundColor(.yellow)
+                Spacer()
+                Button("Resume", action: resume)
             case .rendering:
                 Label("Rendering now", systemImage: "waveform").foregroundColor(.accentColor)
             case .done, .skipped:

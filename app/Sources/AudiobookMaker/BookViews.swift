@@ -26,6 +26,7 @@ struct BookRow: View {
     var position: Int? = nil
     var move: ((Int) -> Void)? = nil   // -1 up, +1 down in the queue
     var isLastInQueue = false
+    var paused = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -41,7 +42,7 @@ struct BookRow: View {
             }
             Spacer()
             if let position, let move { QueueArrows(position: position, isLast: isLastInQueue, move: move) }
-            StateBadge(state: book.state, queued: book.queued, position: position)
+            StateBadge(state: book.state, queued: book.queued, position: position, paused: paused)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
@@ -81,12 +82,17 @@ struct StateBadge: View {
     let state: BookState
     var queued = false
     var position: Int? = nil
+    var paused = false   // the render is paused (⌘P)
 
     /// "Queued · #2" for an item waiting its turn in the queue, so it's clear what runs next.
     private var showsQueued: Bool { queued && [.waiting, .ready, .checking].contains(state) }
-    private var label: String { showsQueued ? (position.map { "Queued · #\($0)" } ?? "Queued") : state.label }
+    private var label: String {
+        if paused && state == .rendering { return "Paused" }
+        return showsQueued ? (position.map { "Queued · #\($0)" } ?? "Queued") : state.label
+    }
 
     var color: Color {
+        if paused && state == .rendering { return .yellow }
         if showsQueued { return .orange }
         switch state {
         case .done, .skipped: return .green
@@ -157,6 +163,7 @@ struct BookDetail: View {
 
             Section {
                 QueueButton(state: book.state, queued: book.queued, position: model.queuePosition(book.id),
+                            paused: model.isPaused, resume: { model.resume() },
                             after: model.queuedBefore(book.id),
                             add: { model.addToQueue(book) }, remove: { model.takeOut(book.id) },
                             now: { model.renderNow(book.id) })

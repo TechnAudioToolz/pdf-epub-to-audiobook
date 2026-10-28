@@ -46,7 +46,7 @@ struct AudiobookMakerApp: App {
 
 extension AudiobookMakerApp {
     /// Optional launch arguments, for scripting and testing:
-    ///   open -a "Audiobook Maker" --args --add book.pdf --add other.epub --start
+    ///   open -a "Audiobook Maker" --args --add book.pdf --add other.epub --start --keep-awake
     func handleLaunchArguments() {
         if let folder = UserDefaults.standard.string(forKey: "screenshots") {  // README images, see Screenshots.swift
             Task { await Screenshots.run(model, into: URL(fileURLWithPath: folder)) }
@@ -55,6 +55,7 @@ extension AudiobookMakerApp {
         let args = CommandLine.arguments
         let files = zip(args, args.dropFirst()).filter { $0.0 == "--add" }.map { URL(fileURLWithPath: $0.1) }
         if !files.isEmpty { model.add(files) }
+        if args.contains("--keep-awake") { KeepAwake.shared.isOn = true }
         if args.contains("--start") {
             // let the dry runs read the books first
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { model.startQueue() }
@@ -164,6 +165,7 @@ struct ContentView: View {
                 SettingsButton()
                 Button { openDonatePage() } label: { Label("Donate", systemImage: "heart") }
                     .help("Support this project")
+                KeepAwakeButton()
             }
         }
     }

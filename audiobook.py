@@ -28,6 +28,7 @@ warnings.filterwarnings("ignore")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 SAMPLE_RATE = 24000
+PROGRESS = False  # --verbose: also report page-by-page progress while reading a PDF
 PROJECT = Path(__file__).resolve().parent  # all output stays inside the project folder
 
 
@@ -394,9 +395,16 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     meta = doc.metadata or {}
     title, author = title_and_author(meta.get("title"), meta.get("author"), path)
 
-    pages = [extract_page_lines(p) for p in doc]
-    empty = sum(1 for p in pages if not p)
-    if empty > len(pages) * 0.5:
+    # A scan (pages that are only pictures) is spotted cheaply first, so it goes straight to text recognition
+    # instead of the full layout analysis, which takes minutes on hundreds of picture pages.
+    empty = sum(1 for p in doc if not p.get_text("text").strip())
+    pages = []
+    if empty <= len(doc) * 0.5:
+        for n, p in enumerate(doc, 1):
+            pages.append(extract_page_lines(p))
+            if PROGRESS and (n % 10 == 0 or n == len(doc)):
+                print(f"Reading page {n}/{len(doc)}", flush=True)  # the app shows this while checking
+    if empty > len(doc) * 0.5:
         pages = ocr_pages(path, len(doc))  # a scan: read the page pictures with the Mac's text recognition
         if pages is None:
             sys.exit(
@@ -532,7 +540,7 @@ def ocr_pages(path, count):
         proc = subprocess.Popen([exe, str(path.resolve()), str(tmp)], stdout=subprocess.PIPE, text=True)
         for line in proc.stdout:
             n = re.match(r"OCR page (\d+)/(\d+)", line)
-            if n and (int(n[1]) % 20 == 0 or n[1] == n[2]):
+            if n and (int(n[1]) % (5 if PROGRESS else 20) == 0 or n[1] == n[2]):
                 print(line.rstrip(), flush=True)
         if proc.wait() != 0 or not tmp.exists():
             return None
@@ -1565,6 +1573,8 @@ def main():
                     help="every ~10 seconds, print how far into the chapter and book it is, and the time left")
     ap.add_argument("--no-notify", action="store_true", help="no Mac notification when each book finishes")
     args = ap.parse_args()
+    global PROGRESS
+    PROGRESS = args.verbose
     unknown = {k.strip() for k in (args.keep or "").split(",") if k.strip()} - set(KEEP_CHOICES)
     if unknown:
         ap.error(f"--keep: unknown {', '.join(sorted(unknown))} (choose from {', '.join(KEEP_CHOICES)})")

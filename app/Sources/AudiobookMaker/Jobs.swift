@@ -243,10 +243,14 @@ struct JobsBox: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             if model.jobs.isEmpty {
-                VStack(spacing: 6) {
-                    Text("Drop a folder of MP3s here").font(.callout)
-                    Text("Already have an audiobook as MP3 files? They become one M4B, one chapter per file.")
-                        .font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+                // the same look as the books area above
+                VStack(spacing: 10) {
+                    Image(systemName: "headphones").font(.system(size: 36)).foregroundColor(.secondary)
+                        .accessibilityHidden(true)
+                    Text("Drop audio files here").font(.title3)
+                    Text("MP3s or a folder of them: they become one M4B, one chapter per file")
+                        .foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Button("Add audio…") { model.addAudio(chooseAudio()) }
                 }
                 .padding(.horizontal, 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

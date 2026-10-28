@@ -373,13 +373,15 @@ struct LogView: View {
                 .padding(8)
             }
             .safeAreaInset(edge: .bottom) {
-                if !model.liveStatus.isEmpty {
-                    Text(model.liveStatus)
-                        .font(.system(.caption, design: .monospaced).weight(.semibold))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(.bar)
-                        .accessibilityLabel("Progress: \(model.liveStatus)")
+                VStack(spacing: 0) {
+                    ForEach([model.checkStatus, model.liveStatus].filter { !$0.isEmpty }, id: \.self) { status in
+                        Text(status)
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(.bar)
+                            .accessibilityLabel("Progress: \(status)")
+                    }
                 }
             }
             .background(Color(nsColor: .textBackgroundColor))

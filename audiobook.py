@@ -1425,7 +1425,9 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
     para_gap = np.zeros(int(SAMPLE_RATE * 0.45), dtype=np.float32)
     title_gap = np.zeros(int(SAMPLE_RATE * 1.2), dtype=np.float32)
     total_chars = sum(len(c.text) for i, c in enumerate(book.chapters) if not only or i + 1 in only)
-    done_chars, start = 0, time.time()
+    # Speed is measured only on chapters made in this run: already-made (cached) ones take no time, and
+    # counting them would make the time left look far too short.
+    done_chars, made_chars, start = 0, 0, time.time()
 
     for i, ch in enumerate(book.chapters, 1):
         if only and i not in only:
@@ -1448,8 +1450,8 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
                 last_report = time.time()
                 book_done = done_chars + len(ch.text) * ch_done / ch_chars
                 pct_book = 100 * book_done / max(total_chars, 1)
-                el = time.time() - start
-                eta = f" · about {duration_words(el / book_done * (total_chars - book_done))} left" if el > 30 and book_done else ""
+                el, made = time.time() - start, made_chars + len(ch.text) * ch_done / ch_chars
+                eta = f" · about {duration_words(el / made * (total_chars - book_done))} left" if el > 30 and made else ""
                 print(f"  [p {n}/{len(spoken_paras)}] {100 * ch_done / ch_chars:.0f}% of chapter · "
                       f"{pct_book:.0f}% of book{eta}", flush=True)
             ch_done += len(p)
@@ -1462,8 +1464,9 @@ def synthesize(book: Book, work: Path, voice: str, speed: float, lang: str, only
         sf.write(tmp, np.concatenate(pieces), SAMPLE_RATE)
         tmp.rename(wav)  # atomic: an interrupted chapter is redone, never half-used
         done_chars += len(ch.text)
+        made_chars += len(ch.text)
         el = time.time() - start
-        eta = el / max(done_chars, 1) * (total_chars - done_chars)
+        eta = el / max(made_chars, 1) * (total_chars - done_chars)
         print(f"    done; elapsed {el/60:.1f} min, ~{eta/60:.0f} min left", flush=True)
 
 

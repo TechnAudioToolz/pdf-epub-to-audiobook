@@ -196,7 +196,7 @@ enum EngineOutput {
     static func problem(_ line: String) -> String? {
         if line.contains("no text layer") || line.contains("No readable text") {
             return "This PDF is a scan (its pages are pictures), and the text recognition couldn't read it. "
-                + "Check the Log (⌘L) for details."
+                + "Turn on verbose mode (⌘L) for details."
         }
         if line.hasPrefix("Unsupported file type") { return "This kind of file isn't supported. Use a PDF, EPUB or TXT." }
         if line.contains("Error:") || line.hasPrefix("Traceback") { return line }

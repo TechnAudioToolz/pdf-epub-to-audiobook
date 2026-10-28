@@ -114,13 +114,16 @@ struct KeepAwakeButton: View {
 
     var body: some View {
         Toggle(isOn: $keepAwake.isOn) {
-            Label(keepAwake.isOn ? "Keeping awake" : "Keep awake",
-                  systemImage: keepAwake.isOn ? "cup.and.saucer.fill" : "cup.and.saucer")
+            Label("No sleep mode", systemImage: keepAwake.isOn ? "cup.and.saucer.fill" : "cup.and.saucer")
         }
-        .help(keepAwake.isOn
-              ? "The Mac won't sleep while Audiobook Maker is open. Click to let it sleep again."
-              : "Keep the Mac awake while Audiobook Maker is open, so audiobooks keep being made when you walk away. "
-                + "The screen can still turn off. (Closing a laptop's lid still puts it to sleep.)")
+        .help(Self.tip)
+    }
+
+    @MainActor static var tip: String {
+        KeepAwake.shared.isOn
+            ? "No sleep mode is on: the Mac won't go to sleep while the app is open. Click to turn it off."
+            : "No sleep mode: keep the Mac awake while the app is open, so audiobooks keep being made when you "
+              + "walk away. The screen can still turn off; closing a laptop's lid still sleeps it."
     }
 }
 

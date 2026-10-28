@@ -190,18 +190,20 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $model.selection) {
-                    ForEach(model.books) { book in
-                        BookRow(book: book)
+                    ForEach(model.booksInOrder) { book in
+                        BookRow(book: book, position: model.queuePosition(book.id),
+                                move: { model.moveInQueue(book.id, by: $0) },
+                                isLastInQueue: model.queuePosition(book.id) == model.queueOrder.count)
                             .tag(book.id)
                             .contentShape(Rectangle())
                             .simultaneousGesture(TapGesture().onEnded { model.selection = book.id })
                             .contextMenu {
-                                if book.queued {
-                                    Button("Take out of queue") { book.queued = false }
-                                } else if book.state != .rendering {
-                                    Button("Add to queue") { model.addToQueue(book) }
-                                }
-                                Button("Remove from list") { model.remove(book) }
+                                QueueMenu(state: book.state, queued: book.queued,
+                                          add: { model.addToQueue(book) }, remove: { model.takeOut(book.id) },
+                                          now: { model.renderNow(book.id) },
+                                          checkAgain: { model.checkFromScratch(book) },
+                                          clearAudio: { model.checkFromScratch(book, audio: true) },
+                                          removeFromList: { model.remove(book) })
                                 if let out = book.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
                                 }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PDFKit
 
 enum BookState: Equatable {
     case waiting, checking, ready, rendering, done, skipped, failed(String)
@@ -118,6 +119,11 @@ final class AppModel: ObservableObject {
     }
     @Published var isRunning = false
     @Published var isPaused = false
+    /// The queue, in the order things will be made (books and MP3 jobs alike). Items leave it when they start.
+    @Published var queueOrder: [UUID] = []
+    /// The item being made right now, and one we stopped so another could jump ahead of it.
+    var currentItem: UUID?
+    var preempted: UUID?
     /// The engine's own output while rendering (the Log panel), newest last.
     @Published var log: [String] = []
     /// The latest progress report ("Chapter 7 of 38 · 42% of chapter · 18% of book · about 6 h left"),
@@ -180,6 +186,7 @@ final class AppModel: ObservableObject {
 
     func remove(_ book: Book) {
         guard book.state != .rendering else { return }
+        queueOrder.removeAll { $0 == book.id }
         books.removeAll { $0.id == book.id }
         if selection == book.id { selection = books.first?.id }
     }
@@ -192,15 +199,43 @@ final class AppModel: ObservableObject {
             candidates += exts.map { engine.root.appendingPathComponent("covers/\(book.fileStem).\($0)") }
         }
         let folder = book.url.deletingLastPathComponent()
-        for name in [book.fileStem, "\(book.fileStem)-Cover", "\(book.fileStem) cover", "cover", "folder"] {
+        // cover.jpg / folder.jpg belong to a folder, so they only count when the folder holds just this book
+        let items = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let booksHere = items.filter { Self.bookTypes.contains($0.pathExtension.lowercased()) }.count
+        let names = [book.fileStem, "\(book.fileStem)-Cover", "\(book.fileStem) cover"] + (booksHere <= 1 ? ["cover", "folder"] : [])
+        for name in names {
             candidates += exts.map { folder.appendingPathComponent("\(name).\($0)") }
         }
         if let found = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             book.cover = NSImage(contentsOf: found)
             book.coverNote = "Found: \(found.lastPathComponent)"
         } else {
-            book.coverNote = "Uses the book's first page. Drop an image to change it."
+            // something to look at straight away: the PDF's first page, until the check picks the best cover
+            if book.url.pathExtension.lowercased() == "pdf", let page = PDFDocument(url: book.url)?.page(at: 0) {
+                book.cover = page.thumbnail(of: NSSize(width: 300, height: 435), for: .mediaBox)
+            }
+            book.coverNote = "Looking for the cover…"
         }
+    }
+
+    /// Moves the engine's saved data for this book (cleaned text, scanned-page text, cover previews) to the
+    /// Trash and checks it again from scratch. Finished chapters' audio is kept unless `audio` is true.
+    func checkFromScratch(_ book: Book, audio: Bool = false) {
+        guard let engine, book.state != .rendering else { return }
+        let work = engine.root.appendingPathComponent("work/\(book.fileStem)")
+        let items = (try? FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: nil)) ?? []
+        for item in items where audio || !item.lastPathComponent.hasPrefix("audio_") {
+            try? FileManager.default.trashItem(at: item, resultingItemURL: nil)
+        }
+        book.coverURL = nil
+        book.title = ""
+        book.author = ""
+        book.unknownWords = []
+        if book.state != .done { book.state = .waiting }
+        findCover(book)
+        check(book)
+        lastMessage = audio ? "Cleared everything saved for \(book.fileStem), including its audio (in the Trash)"
+                            : "Checking \(book.fileStem) again from scratch"
     }
 
     func setCover(_ url: URL, for book: Book, note: String? = nil) {
@@ -359,25 +394,92 @@ final class AppModel: ObservableObject {
     /// The toolbar's Start: queues everything that isn't made yet (if nothing is queued), then runs the queue.
     func startQueue() {
         let waiting: (BookState) -> Bool = { [.waiting, .ready, .checking].contains($0) }
-        if !books.contains(where: { $0.queued }) && !jobs.contains(where: { $0.queued }) {
-            books.filter { waiting($0.state) }.forEach { $0.queued = true }
-            jobs.filter { waiting($0.state) }.forEach { $0.queued = true }
+        if queueOrder.isEmpty {
+            books.filter { waiting($0.state) }.forEach { $0.queued = true; enqueue($0.id) }
+            jobs.filter { waiting($0.state) }.forEach { $0.queued = true; enqueue($0.id) }
         }
         runQueue()
     }
 
+    /// Puts an item in the queue: at the end, at the front, or at a given place.
+    func enqueue(_ id: UUID, at index: Int? = nil) {
+        queueOrder.removeAll { $0 == id }
+        queueOrder.insert(id, at: min(index ?? queueOrder.count, queueOrder.count))
+    }
+
+    /// Moves a queued item up (-1) or down (+1) one place in the queue.
+    func moveInQueue(_ id: UUID, by step: Int) {
+        guard let i = queueOrder.firstIndex(of: id), queueOrder.indices.contains(i + step) else { return }
+        queueOrder.swapAt(i, i + step)
+    }
+
+    /// A list in the order things will happen: what's being made, then the queue in order, then the rest.
+    func inQueueOrder<T: AnyObject>(_ items: [T], id: (T) -> UUID, rendering: (T) -> Bool) -> [T] {
+        let making = items.filter(rendering)
+        let queued = items.filter { !rendering($0) && queuePosition(id($0)) != nil }
+            .sorted { queuePosition(id($0))! < queuePosition(id($1))! }
+        let rest = items.filter { !rendering($0) && queuePosition(id($0)) == nil }
+        return making + queued + rest
+    }
+
+    var booksInOrder: [Book] { inQueueOrder(books, id: { $0.id }, rendering: { $0.state == .rendering }) }
+    var jobsInOrder: [AudioJob] { inQueueOrder(jobs, id: { $0.id }, rendering: { $0.state == .rendering }) }
+
+    /// 1 for the next item to be made, 2 for the one after, and so on.
+    func queuePosition(_ id: UUID) -> Int? { queueOrder.firstIndex(of: id).map { $0 + 1 } }
+
+    /// The title of whatever comes just before this item in the queue (or is being made now).
+    func queuedBefore(_ id: UUID) -> String? {
+        guard let i = queueOrder.firstIndex(of: id) else { return nil }
+        let before = i == 0 ? currentItem : queueOrder[i - 1]
+        return books.first { $0.id == before }?.displayTitle ?? jobs.first { $0.id == before }?.displayTitle
+    }
+
+    private func makeReady(_ state: inout BookState) {
+        if state == .done || state == .skipped { state = .ready }
+        if case .failed = state { state = .ready }
+    }
+
     func addToQueue(_ book: Book) {
-        if book.state == .done || book.state == .skipped || { if case .failed = book.state { return true }; return false }() {
-            book.state = .ready
-        }
+        makeReady(&book.state)
         book.queued = true
+        enqueue(book.id)
         runQueue()
     }
 
     func addToQueue(_ job: AudioJob) {
-        if job.state == .done || { if case .failed = job.state { return true }; return false }() { job.state = .ready }
+        makeReady(&job.state)
         job.queued = true
+        enqueue(job.id)
         runQueue()
+    }
+
+    func takeOut(_ id: UUID) {
+        queueOrder.removeAll { $0 == id }
+        books.first { $0.id == id }?.queued = false
+        jobs.first { $0.id == id }?.queued = false
+    }
+
+    /// Jump the queue: this item is made next. If something else is being made, it stops (its finished
+    /// chapters are kept), this one starts, and the stopped one carries on straight after.
+    func renderNow(_ id: UUID) {
+        guard id != currentItem else { return }
+        if let book = books.first(where: { $0.id == id }) { makeReady(&book.state); book.queued = true }
+        if let job = jobs.first(where: { $0.id == id }) { makeReady(&job.state); job.queued = true }
+        enqueue(id, at: 0)
+        if isRunning, let running = currentItem, current?.isRunning == true {
+            preempted = running
+            if isPaused { resume() }
+            current?.terminate()  // its exit handler puts it back in the queue right after this one
+        } else {
+            runQueue()
+        }
+    }
+
+    /// The exit handlers' share of a jump: put the stopped item back, second in line.
+    func requeueAfterJump(_ id: UUID) {
+        preempted = nil
+        enqueue(id, at: 1)
     }
 
     /// Starts working through the queue, unless it already is (then new items are picked up in turn).
@@ -421,12 +523,18 @@ final class AppModel: ObservableObject {
 
     func renderNext() {
         let next: (BookState) -> Bool = { [.waiting, .ready, .checking].contains($0) }
-        if !stopRequested, books.first(where: { $0.queued && next($0.state) }) == nil,
-           let job = jobs.first(where: { $0.queued && next($0.state) }) {
-            return renderJob(job)  // books first, then the MP3 jobs
+        currentItem = nil
+        // the first item in the queue that can be made; anything removed from the list drops out
+        queueOrder.removeAll { id in !books.contains { $0.id == id && $0.queued } && !jobs.contains { $0.id == id && $0.queued } }
+        let id = queueOrder.first { id in
+            books.contains { $0.id == id && next($0.state) } || jobs.contains { $0.id == id && next($0.state) }
         }
-        guard !stopRequested, let engine,
-              let book = books.first(where: { $0.queued && next($0.state) }) else {
+        if !stopRequested, let id, let job = jobs.first(where: { $0.id == id }) {
+            queueOrder.removeAll { $0 == id }
+            currentItem = id
+            return renderJob(job)
+        }
+        guard !stopRequested, let engine, let id, let book = books.first(where: { $0.id == id }) else {
             isRunning = false
             current = nil
             let done = books.filter { $0.state == .done }.count + jobs.filter { $0.state == .done }.count
@@ -435,6 +543,8 @@ final class AppModel: ObservableObject {
         }
         book.state = .rendering
         book.queued = false
+        queueOrder.removeAll { $0 == book.id }
+        currentItem = book.id
         book.progress = 0
         book.detail = "Starting…"
         var skipped = false
@@ -467,9 +577,15 @@ final class AppModel: ObservableObject {
                 lastError = line
             }
         }, onExit: { [weak self] status in
-            if self?.stopRequested == true {
+            if self?.preempted == book.id {
+                book.state = .ready
+                book.queued = true
+                book.detail = "Paused for another book; carries on next"
+                self?.requeueAfterJump(book.id)
+            } else if self?.stopRequested == true {
                 book.state = .ready
                 book.queued = true  // still in the queue: Start picks it up where it stopped
+                self?.enqueue(book.id, at: 0)
                 book.detail = "Stopped"
             } else if skipped {
                 book.state = .skipped
@@ -507,7 +623,7 @@ final class AppModel: ObservableObject {
         let running = states.filter { $0 == .rendering }.count
         let plural = { (n: Int, word: String) in "\(n) \(word)\(n == 1 ? "" : "s")" }
         let items = jobs.isEmpty ? plural(books.count, "book") : "\(plural(books.count, "book")), \(plural(jobs.count, "MP3 job"))"
-        let queued = books.filter(\.queued).count + jobs.filter(\.queued).count
+        let queued = queueOrder.count
         return "\(items) · \(done) done · \(running) rendering · \(queued) queued"
     }
 }

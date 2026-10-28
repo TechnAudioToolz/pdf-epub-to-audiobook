@@ -78,6 +78,7 @@ extension AppModel {
 
     func removeJob(_ job: AudioJob) {
         guard job.state != .rendering else { return }
+        queueOrder.removeAll { $0 == job.id }
         jobs.removeAll { $0.id == job.id }
         if selection == job.id { selection = books.first?.id ?? jobs.first?.id }
     }
@@ -209,9 +210,15 @@ extension AppModel {
                 lastError = line
             }
         }, onExit: { [weak self] status in
-            if self?.stopRequested == true {
+            if self?.preempted == job.id {
                 job.state = .ready
                 job.queued = true
+                job.detail = "Paused for another book; carries on next"
+                self?.requeueAfterJump(job.id)
+            } else if self?.stopRequested == true {
+                job.state = .ready
+                job.queued = true
+                self?.enqueue(job.id, at: 0)
                 job.detail = "Stopped"
             } else if status == 0 {
                 job.state = .done
@@ -256,8 +263,10 @@ struct JobsBox: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $model.selection) {
-                    ForEach(model.jobs) { job in
-                        JobRow(job: job)
+                    ForEach(model.jobsInOrder) { job in
+                        JobRow(job: job, position: model.queuePosition(job.id),
+                               move: { model.moveInQueue(job.id, by: $0) },
+                               isLastInQueue: model.queuePosition(job.id) == model.queueOrder.count)
                             .tag(job.id)
                             .contentShape(Rectangle())
                             .onDrop(of: [.fileURL], isTargeted: nil) { providers in  // more files for this job
@@ -266,12 +275,9 @@ struct JobsBox: View {
                             }
                             .simultaneousGesture(TapGesture().onEnded { model.selection = job.id })
                             .contextMenu {
-                                if job.queued {
-                                    Button("Take out of queue") { job.queued = false }
-                                } else if job.state != .rendering {
-                                    Button("Add to queue") { model.addToQueue(job) }
-                                }
-                                Button("Remove from list") { model.removeJob(job) }
+                                QueueMenu(state: job.state, queued: job.queued, isJob: true,
+                                          add: { model.addToQueue(job) }, remove: { model.takeOut(job.id) },
+                                          now: { model.renderNow(job.id) }, removeFromList: { model.removeJob(job) })
                                 if let out = job.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
                                 }
@@ -292,6 +298,9 @@ struct JobsBox: View {
 
 struct JobRow: View {
     @ObservedObject var job: AudioJob
+    var position: Int? = nil
+    var move: ((Int) -> Void)? = nil
+    var isLastInQueue = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -306,7 +315,8 @@ struct JobRow: View {
                 }
             }
             Spacer()
-            StateBadge(state: job.state, queued: job.queued)
+            if let position, let move { QueueArrows(position: position, isLast: isLastInQueue, move: move) }
+            StateBadge(state: job.state, queued: job.queued, position: position)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
@@ -374,8 +384,10 @@ struct JobDetail: View {
             }
 
             Section {
-                QueueButton(state: job.state, queued: job.queued,
-                            add: { model.addToQueue(job) }, remove: { job.queued = false })
+                QueueButton(state: job.state, queued: job.queued, position: model.queuePosition(job.id),
+                            after: model.queuedBefore(job.id),
+                            add: { model.addToQueue(job) }, remove: { model.takeOut(job.id) },
+                            now: { model.renderNow(job.id) })
             }
 
             Section {
@@ -451,8 +463,17 @@ struct TrackRow: View {
 struct QueueButton: View {
     let state: BookState
     let queued: Bool
+    var position: Int? = nil
+    var after: String? = nil      // what's made just before it (or is being made now)
     let add: () -> Void
     let remove: () -> Void
+    var now: () -> Void = {}
+
+    private var queueText: String {
+        guard let position else { return "In the queue" }
+        if let after { return "#\(position) in the queue: made after “\(after)”" }
+        return "#\(position) in the queue: next up"
+    }
 
     var body: some View {
         HStack {
@@ -465,9 +486,12 @@ struct QueueButton: View {
                 Button("Make it again", action: add)
             default:
                 if queued {
-                    Label("In the queue: it will be made when its turn comes", systemImage: "clock")
-                        .foregroundColor(.orange)
+                    Label(queueText, systemImage: "clock").foregroundColor(.orange).lineLimit(2)
                     Spacer()
+                    if position != 1 || after != nil {
+                        Button("Render now", action: now)
+                            .help("Jump the queue: whatever is being made pauses, and carries on after this")
+                    }
                     Button("Take out", action: remove)
                 } else {
                     Button(action: add) {
@@ -476,9 +500,43 @@ struct QueueButton: View {
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
                     .help("Queue it; the queue starts by itself if it isn't running")
+                    Button("Render now", action: now)
+                        .controlSize(.large)
+                        .help("Jump the queue: whatever is being made pauses, and carries on after this")
                 }
             }
         }
+    }
+}
+
+/// Right-click menu for a book or MP3 job. Built from the item's current state each time it opens.
+struct QueueMenu: View {
+    let state: BookState
+    let queued: Bool
+    var isJob = false
+    let add: () -> Void
+    let remove: () -> Void
+    let now: () -> Void
+    var checkAgain: (() -> Void)? = nil
+    var clearAudio: (() -> Void)? = nil
+    let removeFromList: () -> Void
+
+    var body: some View {
+        if state != .rendering {
+            Button("Render now (jump the queue)", action: now)
+            if queued {
+                Button("Take out of queue", action: remove)
+            } else {
+                Button(state == .done || state == .skipped ? "Make it again" : "Add to queue", action: add)
+            }
+        }
+        if let checkAgain, let clearAudio {
+            Divider()
+            Button("Check again from scratch", action: checkAgain).disabled(state == .rendering)
+            Button("Clear saved audio too, and check again", action: clearAudio).disabled(state == .rendering)
+        }
+        Divider()
+        Button("Remove from list", action: removeFromList).disabled(state == .rendering)
     }
 }
 

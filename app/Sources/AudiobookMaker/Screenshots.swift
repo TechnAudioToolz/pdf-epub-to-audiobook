@@ -114,6 +114,11 @@ enum Screenshots {
         job.tracks = (1...12).map { Track(url: URL(fileURLWithPath: "/Audiobooks/Meditations/Meditations - Book \($0).mp3"),
                                           name: "Book \($0)", duration: "00:27:00") }
         model.jobs = [job]
+        for book in [model.books[3], model.books[2]] {  // Mississippi next, then Poe
+            book.queued = true
+            model.enqueue(book.id)
+        }
+        model.currentItem = london.id
         model.selection = london.id
         model.voice = "bm_george"
         model.outputPath = "/Users/you/Audiobooks"  // a neutral path for the status bar

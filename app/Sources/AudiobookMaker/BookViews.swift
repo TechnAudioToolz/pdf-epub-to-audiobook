@@ -23,6 +23,9 @@ struct CoverView: View {
 
 struct BookRow: View {
     @ObservedObject var book: Book
+    var position: Int? = nil
+    var move: ((Int) -> Void)? = nil   // -1 up, +1 down in the queue
+    var isLastInQueue = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -37,7 +40,8 @@ struct BookRow: View {
                 }
             }
             Spacer()
-            StateBadge(state: book.state, queued: book.queued)
+            if let position, let move { QueueArrows(position: position, isLast: isLastInQueue, move: move) }
+            StateBadge(state: book.state, queued: book.queued, position: position)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
@@ -56,13 +60,31 @@ struct BookRow: View {
     }
 }
 
+/// Up and down arrows on a queued row, to change its place in the queue.
+struct QueueArrows: View {
+    let position: Int
+    let isLast: Bool
+    let move: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button { move(-1) } label: { Image(systemName: "chevron.up") }
+                .disabled(position == 1).help("Earlier in the queue").accessibilityLabel("Move up in the queue")
+            Button { move(1) } label: { Image(systemName: "chevron.down") }
+                .disabled(isLast).help("Later in the queue").accessibilityLabel("Move down in the queue")
+        }
+        .buttonStyle(.borderless)
+    }
+}
+
 struct StateBadge: View {
     let state: BookState
     var queued = false
+    var position: Int? = nil
 
-    /// "Queued" for an item waiting its turn in the queue, so it's clear what will run.
+    /// "Queued · #2" for an item waiting its turn in the queue, so it's clear what runs next.
     private var showsQueued: Bool { queued && [.waiting, .ready, .checking].contains(state) }
-    private var label: String { showsQueued ? "Queued" : state.label }
+    private var label: String { showsQueued ? (position.map { "Queued · #\($0)" } ?? "Queued") : state.label }
 
     var color: Color {
         if showsQueued { return .orange }
@@ -134,8 +156,10 @@ struct BookDetail: View {
             }
 
             Section {
-                QueueButton(state: book.state, queued: book.queued,
-                            add: { model.addToQueue(book) }, remove: { book.queued = false })
+                QueueButton(state: book.state, queued: book.queued, position: model.queuePosition(book.id),
+                            after: model.queuedBefore(book.id),
+                            add: { model.addToQueue(book) }, remove: { model.takeOut(book.id) },
+                            now: { model.renderNow(book.id) })
             }
 
             if case .failed(let reason) = book.state {

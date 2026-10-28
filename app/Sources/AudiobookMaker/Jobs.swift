@@ -495,6 +495,7 @@ struct QueueButton: View {
                     .foregroundColor(.yellow)
                 Spacer()
                 Button("Resume", action: resume)
+                    .help("Carry on making it")
             case .rendering:
                 Label("Rendering now", systemImage: "waveform").foregroundColor(.accentColor)
             case .done, .skipped:
@@ -512,6 +513,7 @@ struct QueueButton: View {
                             .help("Jump the queue: whatever is being made pauses, and carries on after this")
                     }
                     Button("Take out", action: remove)
+                        .help("Take it out of the queue; it stays in the list")
                 } else {
                     Button(action: add) {
                         Label("Add to queue", systemImage: "plus.circle.fill").frame(maxWidth: .infinity)

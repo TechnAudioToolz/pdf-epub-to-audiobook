@@ -217,13 +217,14 @@ app/make_offline_dmg.sh  # the release DMG: the app with everything inside (app/
 app/make_dmg.sh          # a small DMG whose app downloads its engine on first launch (not released)
 ```
 
+- Hover over any button to see what it does.
 - **Add books:** drag PDFs, EPUBs or folders onto the window, or use **Add books**. Each one is checked right away for title, author and chapters.
 - **Book panel:** click the cover to pick one of the book's first six pages, generate one from the title, paste an image, or choose an image file (or drop an image on it), edit the title or author, choose a voice and **Listen**. **Words to check** lists words the voice will guess; listen to each one, type a sound-alike spelling and **Save** to add a rule for that book.
 - **Try an example book** (on the empty list, or in the Help menu) downloads *The Call of the Wild* from Standard Ebooks, after asking, so you can try the app straight away.
 - **Start queue** renders the books one after another with progress. **Pause** (⌘P) freezes the render, using no CPU, until **Resume**. **Stop** keeps finished chapters.
-- **Keep awake** (the coffee cup, top right) stops the Mac going to sleep on its own while the app is open, so a long queue keeps going when you walk away. The screen can still turn off. `--keep-awake` at launch does the same.
+- **No sleep mode** (the coffee cup, top right) stops the Mac going to sleep on its own while the app is open, so a long queue keeps going when you walk away. The screen can still turn off. `--keep-awake` at launch does the same.
 - **Right-click** a book: Render now (jump the queue), Show Completed in Finder, Check again from scratch, Clear finished books. The status bar shows the time left for the whole queue.
-- **Log** (⌘L) shows what the engine is doing: each chapter as it starts and finishes, plus one live line with how far into the chapter and the book it is and the time left, updated about every 10 seconds (`--verbose` on the command line).
+- **Verbose mode** (the three lines, ⌘L) shows what the engine is doing: each chapter as it starts and finishes, plus one live line with how far into the chapter and the book it is and the time left, updated about every 10 seconds (`--verbose` on the command line).
 - **Donate** opens the support page.
 - **Updates** (Settings → Updates): **Check for updates** asks GitHub for the latest release and offers the download; a weekly check can be turned on. It's the only time the app itself goes online.
 - **Settings** (⌘, or the gear button): where finished audiobooks are saved, file names (book file name or Author - Title), notifications, what else to read (page numbers, headers, footnotes and so on), M4B or one MP3 per chapter, default voice and speed, pronunciation lists, and the tools folder.

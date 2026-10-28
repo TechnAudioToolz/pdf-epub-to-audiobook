@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 struct AudiobookMakerApp: App {
     @StateObject private var model = AppModel()
 
+    init() {
+        // Hover text appears after half a second instead of the Mac's usual second or so.
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
+    }
+
     var body: some Scene {
         WindowGroup("Audiobook Maker") {
             ContentView()
@@ -132,25 +137,25 @@ struct ContentView: View {
         .toolbar {
             ToolbarItemGroup {
                 Button { model.add(chooseBooks()) } label: { Label("Add books", systemImage: "plus") }
-                    .help("Add PDF, EPUB or TXT files, or a folder of them (⌘O)")
+                    .help(tip("Add books"))
                     .keyboardShortcut("o")
                 if model.isRunning {
                     if model.isPaused {
                         Button { model.resume() } label: { Label("Resume", systemImage: "play.fill") }
                             .keyboardShortcut("p")
-                            .help("Carry on rendering (⌘P)")
+                            .help(tip("Resume"))
                     } else {
                         Button { model.pause() } label: { Label("Pause", systemImage: "pause.fill") }
                             .keyboardShortcut("p")
-                            .help("Pause rendering; it uses no CPU until you resume (⌘P)")
+                            .help(tip("Pause"))
                     }
                     Button { model.stop() } label: { Label("Stop", systemImage: "stop.fill") }
                         .keyboardShortcut(".")
-                        .help("Stop the queue (⌘.)")
+                        .help(tip("Stop"))
                 } else {
                     Button { model.startQueue() } label: { Label("Start queue", systemImage: "play.fill") }
                         .keyboardShortcut("r")
-                        .help("Start the queue (⌘R)")
+                        .help(tip("Start queue"))
                         .disabled((model.books.isEmpty && model.jobs.isEmpty) || model.engine == nil)
                 }
                 Button {
@@ -159,13 +164,48 @@ struct ContentView: View {
                         NSWorkspace.shared.open(folder)
                     }
                 } label: { Label("Output folder", systemImage: "folder") }
-                Toggle(isOn: $model.showLog) { Label("Log", systemImage: "text.alignleft") }
+                    .help(tip("Output folder"))
+                Toggle(isOn: $model.showLog) { Label("Verbose mode", systemImage: "text.alignleft") }
                     .keyboardShortcut("l")
-                    .help("Show what the engine is doing: each chapter, progress and time left (⌘L)")
+                    .help(tip("Verbose mode"))
                 SettingsButton()
                 Button { openDonatePage() } label: { Label("Donate", systemImage: "heart") }
-                    .help("Support this project")
+                    .help(tip("Donate"))
                 KeepAwakeButton()
+            }
+        }
+        // SwiftUI's .help doesn't always show on toolbar buttons, so the toolbar items get the same text as
+        // ordinary Mac tooltips too, again whenever a button changes (Pause/Resume, the cup, M4B/MP3).
+        .onAppear { applyToolbarTips() }
+        .onChange(of: model.isRunning) { _ in applyToolbarTips() }
+        .onChange(of: model.isPaused) { _ in applyToolbarTips() }
+        .onChange(of: model.outputFormat) { _ in applyToolbarTips() }
+        .onReceive(KeepAwake.shared.$isOn) { _ in applyToolbarTips() }
+    }
+
+    /// What each toolbar button does, shown when the mouse rests on it. Keyed by the button's label.
+    private func tip(_ label: String) -> String {
+        switch label {
+        case "Add books": return "Add books (⌘O): PDF, EPUB or TXT files, or a folder of them"
+        case "Start queue": return "Start queue (⌘R): make the queued audiobooks, one after another"
+        case "Pause": return "Pause (⌘P): freeze the audiobook being made; it uses no CPU until you resume"
+        case "Resume": return "Resume (⌘P): carry on making the audiobook"
+        case "Stop": return "Stop (⌘.): stop the queue; finished chapters are kept"
+        case "Output folder": return "Open \(model.outputFormat.uppercased()) output folder: where finished audiobooks are saved"
+        case "Verbose mode": return "Verbose mode (⌘L): show what the engine is doing, with each chapter, progress and time left"
+        case "Settings": return "Settings (⌘,)"
+        case "Donate": return "Donate: support this project"
+        case "No sleep mode": return KeepAwakeButton.tip
+        default: return ""
+        }
+    }
+
+    private func applyToolbarTips() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {  // after SwiftUI has rebuilt the toolbar
+            for window in NSApp.windows {
+                for item in window.toolbar?.items ?? [] where !tip(item.label).isEmpty {
+                    item.toolTip = tip(item.label)
+                }
             }
         }
     }

@@ -178,7 +178,7 @@ struct BookDetail: View {
                     Label(reason.isEmpty ? "Something went wrong with this book." : reason,
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.red)
-                    Text("See the Log (⌘L) for the details.").font(.caption).foregroundColor(.secondary)
+                    Text("Turn on verbose mode (⌘L) for the details.").font(.caption).foregroundColor(.secondary)
                 }
             }
 
@@ -227,6 +227,7 @@ struct BookDetail: View {
             Section {
                 if book.unknownWords.isEmpty {
                     Button("Find words the voice will guess") { model.checkWords(book) }
+                        .help("Lists names and unusual words the voice will have to guess, so you can fix how they're said")
                 } else {
                     ForEach(book.unknownWords.prefix(25)) { item in
                         HStack {
@@ -245,6 +246,7 @@ struct BookDetail: View {
                                 .accessibilityLabel("Say \(item.word) as")
                             Button("Save") { model.savePronunciation(word: item.word, sayAs: fixes[item.word, default: ""], book: book) }
                                 .disabled(fixes[item.word, default: ""].isEmpty)
+                                .help("Say \(item.word) like this in this book")
                         }
                     }
                 }
@@ -344,8 +346,10 @@ struct ReadingOptions: View {
                 Spacer()
                 Button("All") { model.keep = Set(AppModel.keepChoices.map(\.id)) }
                     .disabled(model.keep.count == AppModel.keepChoices.count)
+                    .help("Read everything below too")
                 Button("None") { model.keep = [] }
                     .disabled(model.keep.isEmpty)
+                    .help("Read just the book, the way a narrator would")
             }
             ForEach(AppModel.keepChoices, id: \.id) { choice in
                 Toggle(choice.label, isOn: Binding(

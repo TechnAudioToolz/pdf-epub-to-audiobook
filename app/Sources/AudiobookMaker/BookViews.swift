@@ -413,7 +413,7 @@ struct LogView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
-                    ForEach([model.checkStatus, model.liveStatus].filter { !$0.isEmpty }, id: \.self) { status in
+                    ForEach(([model.checkStatus] + model.making.compactMap { model.liveStatus[$0] }).filter { !$0.isEmpty }, id: \.self) { status in
                         Text(status)
                             .font(.system(.caption, design: .monospaced).weight(.semibold))
                             .frame(maxWidth: .infinity, alignment: .leading)

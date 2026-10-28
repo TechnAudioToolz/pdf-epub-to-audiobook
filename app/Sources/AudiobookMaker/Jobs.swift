@@ -183,8 +183,7 @@ extension AppModel {
         job.coverNote = note ?? "Your image: \(url.lastPathComponent)"
     }
 
-    func renderJob(_ job: AudioJob) {
-        guard let engine else { return }
+    func renderJob(_ job: AudioJob, engine: Engine) -> Process {
         job.state = .rendering
         job.queued = false
         job.progress = 0
@@ -195,14 +194,14 @@ extension AppModel {
             args += ["--output-dir", folder.path]
         }
         appendLog("=== \(job.displayTitle) (MP3 → M4B) ===")
-        current = engine.run(args, onLine: { [weak self] line in
+        return engine.run(args, onLine: { [weak self] line in
             self?.appendLog(line)
             if let p = EngineOutput.progress(line) {
                 job.progress = Double(p.index) / Double(p.total + 1)  // the last step joins them
                 job.detail = "Converting file \(p.index) of \(p.total)"
             } else if let minutes = EngineOutput.minutesLeft(line) {
                 job.detail += " · about \(minutes) min left"
-                self?.currentSecondsLeft = Double(minutes * 60)
+                self?.secondsLeft[job.id] = Double(minutes * 60)
             } else if line.hasPrefix("Joining ") {
                 job.detail = "Joining into one M4B…"
             } else if let url = EngineOutput.wrote(line) {
@@ -212,7 +211,7 @@ extension AppModel {
                 lastError = line
             }
         }, onExit: { [weak self] status in
-            if self?.preempted == job.id {
+            if self?.preempted.contains(job.id) == true {
                 job.state = .ready
                 job.queued = true
                 job.detail = "Paused for another book; carries on next"
@@ -231,8 +230,7 @@ extension AppModel {
                 job.detail = lastError.isEmpty ? "Something went wrong" : lastError
                 self?.logBook("MP3 job failed", job.sources[0], lastError)
             }
-            self?.isPaused = false
-            self?.renderNext()
+            self?.finished(job.id)
         })
     }
 }

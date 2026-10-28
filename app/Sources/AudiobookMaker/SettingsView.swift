@@ -56,6 +56,16 @@ struct GeneralSettings: View {
             Section {
                 Toggle("Notify me when each audiobook is finished", isOn: $model.notifyWhenDone)
             }
+            Section {
+                Picker("Make at once", selection: $model.booksAtOnce) {
+                    Text("One book").tag(1)
+                    Text("Two books").tag(2)
+                }
+            } footer: {
+                Text("Two at once can finish a queue sooner: one book doesn't keep every core busy. "
+                     + "Each book takes a little longer, and the Mac works harder.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

@@ -122,7 +122,7 @@ enum Screenshots {
             book.queued = true
             model.enqueue(book.id)
         }
-        model.currentItem = london.id
+        model.making = [london.id]
         model.selection = london.id
         model.voice = "bm_george"
         model.outputPath = "/Users/you/Audiobooks"  // a neutral path for the status bar

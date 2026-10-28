@@ -193,8 +193,15 @@ struct ContentView: View {
                     ForEach(model.books) { book in
                         BookRow(book: book)
                             .tag(book.id)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(TapGesture().onEnded { model.selection = book.id })
                             .contextMenu {
-                                Button("Remove from queue") { model.remove(book) }
+                                if book.queued {
+                                    Button("Take out of queue") { book.queued = false }
+                                } else if book.state != .rendering {
+                                    Button("Add to queue") { model.addToQueue(book) }
+                                }
+                                Button("Remove from list") { model.remove(book) }
                                 if let out = book.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
                                 }

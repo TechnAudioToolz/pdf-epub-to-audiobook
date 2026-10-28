@@ -111,7 +111,7 @@ Always skim `work/<book>/cleaned.txt` after a `--dry-run`. It contains exactly w
 
 ## Limits
 
-- **Scanned PDFs** have no text layer. OCR them first: `brew install ocrmypdf && ocrmypdf --skip-text in.pdf out.pdf`
+- **Scanned PDFs** (pages that are pictures) are read with the Mac's built-in text recognition (the Live Text engine in Apple's Vision framework), offline, with nothing to install. The first time takes a few minutes for a whole book (about 1–3 pages a second) and the result is saved in `work/<book>/`. Recognition skips text it's unsure of (diagrams, handwriting) and can still produce odd words, so check **Words to check**. For the command line, build the tool once: `swiftc -O app/ocr.swift -o bin/ocr` (`app/build.sh` does this too).
 - **Math and equations** come out garbled. Kokoro can't read LaTeX-style math.
 - The Apple GPU (MPS) backend crashes on long sentences in PyTorch, so synthesis runs on CPU.
 
@@ -133,7 +133,7 @@ This writes `voice_samples/index.html`, a page with a player for each voice. It 
 .venv/bin/python audio2m4b.py join "My Audiobook/" [--cover cover.jpg] [--title ..] [--author ..]
 ```
 
-Files are joined in name order ("Part 2" before "Part 10"). Chapter names come from the files' title tags, or their file names. The title and author come from the tags or the folder name ("Author - Title"). The cover is `--cover`, else a picture inside the MP3s, else `cover.jpg` / `folder.jpg` in the folder, else a generated one. Each file is converted once and cached, so a stopped job picks up where it left off. In the app, this is the **MP3 audiobooks → M4B** box under the books.
+Files are joined in name order ("Part 2" before "Part 10"). Chapter names come from the files' title tags, or their file names. The title and author come from the tags or the folder name ("Author - Title"). The cover is `--cover`, else a picture inside the MP3s, else `cover.jpg` / `folder.jpg` in the folder, else a generated one. Each file is converted once and cached, so a stopped job picks up where it left off. In the app, this is the **MP3 audiobooks → M4B** box under the books. Each job's panel lists its files by full name: add more (button, or drop them on the list or on the job), reorder them (drag, or the arrows), remove them, or sort by name; the chapters follow that order.
 
 **A single long MP3:** `audio2m4b.py` converts an audiobook you already have, for example a single 14-hour MP3, into an M4B with real chapter markers. It finds the chapters itself, fully offline:
 

@@ -37,7 +37,7 @@ struct BookRow: View {
                 }
             }
             Spacer()
-            StateBadge(state: book.state)
+            StateBadge(state: book.state, queued: book.queued)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
@@ -58,8 +58,14 @@ struct BookRow: View {
 
 struct StateBadge: View {
     let state: BookState
+    var queued = false
+
+    /// "Queued" for an item waiting its turn in the queue, so it's clear what will run.
+    private var showsQueued: Bool { queued && [.waiting, .ready, .checking].contains(state) }
+    private var label: String { showsQueued ? "Queued" : state.label }
 
     var color: Color {
+        if showsQueued { return .orange }
         switch state {
         case .done, .skipped: return .green
         case .failed: return .red
@@ -69,13 +75,13 @@ struct StateBadge: View {
     }
 
     var body: some View {
-        Text(state.label)
+        Text(label)
             .font(.caption)
             .padding(.horizontal, 8).padding(.vertical, 2)
             .background(color.opacity(0.15))
             .foregroundColor(color)
             .clipShape(Capsule())
-            .accessibilityLabel("Status: \(state.label)")
+            .accessibilityLabel("Status: \(label)")
     }
 }
 
@@ -112,8 +118,10 @@ struct BookDetail: View {
                         Text("Click or drop a cover").font(.caption2).foregroundColor(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        TextField("Title", text: $book.title)
-                        TextField("Author", text: $book.author)
+                        TextField("Title", text: $book.title, prompt: Text("Book title"))
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Author", text: $book.author, prompt: Text("Author"))
+                            .textFieldStyle(.roundedBorder)
                         Text(book.coverNote).font(.caption).foregroundColor(.secondary)
                         if !book.summary.isEmpty {
                             Text(book.summary).font(.caption).foregroundColor(.secondary)
@@ -122,6 +130,20 @@ struct BookDetail: View {
                             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
                         }
                     }
+                }
+            }
+
+            Section {
+                QueueButton(state: book.state, queued: book.queued,
+                            add: { model.addToQueue(book) }, remove: { book.queued = false })
+            }
+
+            if case .failed(let reason) = book.state {
+                Section {
+                    Label(reason.isEmpty ? "Something went wrong with this book." : reason,
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundColor(.red)
+                    Text("See the Log (⌘L) for the details.").font(.caption).foregroundColor(.secondary)
                 }
             }
 

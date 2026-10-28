@@ -5,18 +5,21 @@ import SwiftUI
 /// with a chapter per file. Runs in the same queue as the books, after them (audio2m4b.py join).
 final class AudioJob: ObservableObject, Identifiable {
     let id = UUID()
-    let sources: [URL]
+    /// What to join, in order: the dropped folder at first, then (once checked) its files, which can be
+    /// added to, reordered and removed in the job's panel.
+    @Published var sources: [URL]
     @Published var title = ""
     @Published var author = ""
     @Published var cover: NSImage?
     @Published var coverURL: URL?          // an image the user chose, dropped or pasted
     @Published var coverNote = ""
-    @Published var chapters: [String] = []
+    @Published var tracks: [Track] = []
     @Published var summary = ""
     @Published var state: BookState = .waiting
     @Published var progress = 0.0
     @Published var detail = ""
     @Published var output: URL?
+    @Published var queued = false
 
     init(sources: [URL]) {
         self.sources = sources
@@ -26,6 +29,14 @@ final class AudioJob: ObservableObject, Identifiable {
         sources.count == 1 ? sources[0].lastPathComponent : "\(sources.count) audio files"
     }
     var displayTitle: String { title.isEmpty ? sourceName : title }
+}
+
+/// One audio file of a job: its chapter name and length.
+struct Track: Identifiable, Equatable {
+    let url: URL
+    var name: String
+    var duration: String
+    var id: URL { url }
 }
 
 extension AppModel {
@@ -72,7 +83,7 @@ extension AppModel {
     }
 
     private func jobArgs(_ job: AudioJob) -> [String] {
-        var args = ["join"] + job.sources.map(\.path)
+        var args = ["join"] + job.sources.map(\.path)  // in this order
         if !job.title.isEmpty { args += ["--title", job.title] }
         if !job.author.isEmpty { args += ["--author", job.author] }
         if let cover = job.coverURL { args += ["--cover", cover.path] }
@@ -83,18 +94,18 @@ extension AppModel {
     func checkJob(_ job: AudioJob) {
         guard let engine, job.state != .rendering else { return }
         job.state = .checking
-        job.chapters = []
+        var tracks: [Track] = []
         var titleLine = true
-        engine.run([engine.script("audio2m4b.py")] + jobArgs(job) + ["--check"], onLine: { line in
+        engine.run([engine.script("audio2m4b.py")] + jobArgs(job) + ["--check", "--show-paths"], onLine: { line in
             if titleLine, line.contains(" — ") {
                 titleLine = false
                 let parts = line.components(separatedBy: " — ")
                 if job.title.isEmpty { job.title = parts[0] }
                 if job.author.isEmpty, parts.count > 1, parts[1] != "unknown author" { job.author = parts[1] }
-            } else if line.contains(" files, ") && line.hasSuffix("of audio") {
+            } else if line.contains(" file") && line.hasSuffix("of audio") {
                 job.summary = line
-            } else if let m = EngineOutput.match(#"^\s+\d+\.\s(.+)\t(\S+)$"#, line) {
-                job.chapters.append("\(m[1])  ·  \(m[2])")
+            } else if let m = EngineOutput.match(#"^\s+\d+\.\s(.+)\t(\S+)\t(.+)$"#, line) {
+                tracks.append(Track(url: URL(fileURLWithPath: m[3]), name: m[1], duration: m[2]))
             } else if line.hasPrefix("Cover: "), job.coverURL == nil {
                 job.coverNote = line
             } else if line.hasPrefix("Cover image: "), job.coverURL == nil,
@@ -102,10 +113,65 @@ extension AppModel {
                 job.cover = NSImage(data: data)
             }
         }, onExit: { status in
+            if status == 0, !tracks.isEmpty {
+                job.tracks = tracks
+                job.sources = tracks.map(\.url)  // from now on the job is this exact list of files
+            }
             if job.state == .checking {
                 job.state = status == 0 ? .ready : .failed("Couldn't read these audio files")
             }
         })
+    }
+
+    // MARK: editing a job's files
+
+    /// Adds audio files (or every audio file in a folder, in name order) to the end of the job.
+    func addFiles(_ urls: [URL], to job: AudioJob) {
+        guard job.state != .rendering else { return }
+        var new: [URL] = []
+        for url in urls {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                var found: [URL] = []
+                let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+                while let f = walker?.nextObject() as? URL {
+                    if Self.audioTypes.contains(f.pathExtension.lowercased()) { found.append(f) }
+                }
+                new += found.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            } else if Self.audioTypes.contains(url.pathExtension.lowercased()) {
+                new.append(url)
+            }
+        }
+        let known = Set(job.sources.map(\.standardizedFileURL))
+        new = new.filter { !known.contains($0.standardizedFileURL) }
+        guard !new.isEmpty else { return }
+        job.sources += new
+        job.tracks += new.map { Track(url: $0, name: $0.deletingPathExtension().lastPathComponent, duration: "…") }
+        if job.state == .done { job.state = .ready }
+        checkJob(job)
+    }
+
+    func moveTracks(_ job: AudioJob, from: IndexSet, to: Int) {
+        guard job.state != .rendering else { return }
+        job.tracks.move(fromOffsets: from, toOffset: to)
+        job.sources = job.tracks.map(\.url)
+        checkJob(job)
+    }
+
+    func removeTrack(_ track: Track, from job: AudioJob) {
+        guard job.state != .rendering, job.tracks.count > 1 else { return }
+        job.tracks.removeAll { $0 == track }
+        job.sources = job.tracks.map(\.url)
+        checkJob(job)
+    }
+
+    /// Back to name order ("Part 2" before "Part 10"; disc folders in order).
+    func sortTracks(_ job: AudioJob) {
+        guard job.state != .rendering else { return }
+        job.tracks.sort { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending }
+        job.sources = job.tracks.map(\.url)
+        checkJob(job)
     }
 
     func setJobCover(_ url: URL, for job: AudioJob, note: String? = nil) {
@@ -118,6 +184,7 @@ extension AppModel {
     func renderJob(_ job: AudioJob) {
         guard let engine else { return }
         job.state = .rendering
+        job.queued = false
         job.progress = 0
         job.detail = "Starting…"
         var lastError = ""
@@ -144,6 +211,7 @@ extension AppModel {
         }, onExit: { [weak self] status in
             if self?.stopRequested == true {
                 job.state = .ready
+                job.queued = true
                 job.detail = "Stopped"
             } else if status == 0 {
                 job.state = .done
@@ -187,8 +255,19 @@ struct JobsBox: View {
                     ForEach(model.jobs) { job in
                         JobRow(job: job)
                             .tag(job.id)
+                            .contentShape(Rectangle())
+                            .onDrop(of: [.fileURL], isTargeted: nil) { providers in  // more files for this job
+                                loadURLs(providers) { model.addFiles($0, to: job) }
+                                return true
+                            }
+                            .simultaneousGesture(TapGesture().onEnded { model.selection = job.id })
                             .contextMenu {
-                                Button("Remove from queue") { model.removeJob(job) }
+                                if job.queued {
+                                    Button("Take out of queue") { job.queued = false }
+                                } else if job.state != .rendering {
+                                    Button("Add to queue") { model.addToQueue(job) }
+                                }
+                                Button("Remove from list") { model.removeJob(job) }
                                 if let out = job.output {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([out]) }
                                 }
@@ -223,7 +302,7 @@ struct JobRow: View {
                 }
             }
             Spacer()
-            StateBadge(state: job.state)
+            StateBadge(state: job.state, queued: job.queued)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
@@ -236,6 +315,7 @@ struct JobDetail: View {
     @ObservedObject var job: AudioJob
     @State private var coverTargeted = false
     @State private var pasteFailed = false
+    private var editable: Bool { job.state != .rendering }
 
     var body: some View {
         Form {
@@ -259,8 +339,10 @@ struct JobDetail: View {
                         Text("Click or drop a cover").font(.caption2).foregroundColor(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        TextField("Title", text: $job.title)
-                        TextField("Author", text: $job.author)
+                        TextField("Title", text: $job.title, prompt: Text("Book title"))
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Author", text: $job.author, prompt: Text("Author"))
+                            .textFieldStyle(.roundedBorder)
                         Text(job.coverNote).font(.caption).foregroundColor(.secondary)
                         if !job.summary.isEmpty {
                             Text(job.summary).font(.caption).foregroundColor(.secondary)
@@ -288,26 +370,111 @@ struct JobDetail: View {
             }
 
             Section {
-                if job.state == .checking {
-                    ProgressView().controlSize(.small)
-                } else if job.chapters.isEmpty {
-                    Text("No audio files found yet").foregroundColor(.secondary)
-                } else {
-                    ForEach(Array(job.chapters.prefix(60).enumerated()), id: \.offset) { i, title in
-                        Text("\(i + 1). \(title)").lineLimit(1)
-                    }
-                    if job.chapters.count > 60 {
-                        Text("+ \(job.chapters.count - 60) more").foregroundColor(.secondary)
-                    }
+                QueueButton(state: job.state, queued: job.queued,
+                            add: { model.addToQueue(job) }, remove: { job.queued = false })
+            }
+
+            Section {
+                if job.tracks.isEmpty {
+                    if job.state == .checking { ProgressView().controlSize(.small) }
+                    else { Text("No audio files found yet").foregroundColor(.secondary) }
                 }
+                ForEach(Array(job.tracks.enumerated()), id: \.element.id) { i, track in
+                    TrackRow(number: i + 1, track: track, editable: editable, isFirst: i == 0,
+                             isLast: i == job.tracks.count - 1, canRemove: job.tracks.count > 1,
+                             move: { model.moveTracks(job, from: IndexSet(integer: i), to: i + $0 + ($0 > 0 ? 1 : 0)) },
+                             remove: { model.removeTrack(track, from: job) })
+                }
+                .onMove { model.moveTracks(job, from: $0, to: $1) }
+                HStack {
+                    Button { model.addFiles(chooseAudio(), to: job) } label: { Label("Add files…", systemImage: "plus") }
+                    Button { model.sortTracks(job) } label: { Label("Sort by name", systemImage: "arrow.up.arrow.down") }
+                    Spacer()
+                    if job.state == .checking && !job.tracks.isEmpty { ProgressView().controlSize(.small) }
+                }
+                .disabled(!editable)
             } header: {
-                Text("Chapters (\(job.chapters.count))")
+                Text("Files and chapters (\(job.tracks.count))")
             } footer: {
-                Text("One chapter per file, in file-name order. Chapter names come from the files' title tags, or their names.")
+                Text("One chapter per file, in this order. Drop more audio files here or on the job in the list, "
+                     + "drag files to reorder, or use the arrows.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            loadURLs(providers) { model.addFiles($0, to: job) }
+            return true
+        }
         .formStyle(.grouped)
+    }
+}
+
+/// One file in a job: its full file name, then its chapter name and length, with move and remove buttons.
+struct TrackRow: View {
+    let number: Int
+    let track: Track
+    let editable: Bool
+    let isFirst: Bool
+    let isLast: Bool
+    let canRemove: Bool
+    let move: (Int) -> Void   // -1 up, +1 down
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(number).").monospacedDigit().foregroundColor(.secondary).frame(minWidth: 26, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.url.lastPathComponent).textSelection(.enabled)
+                Text("\(track.name)  ·  \(track.duration)").font(.caption).foregroundColor(.secondary)
+            }
+            Spacer(minLength: 4)
+            if editable {
+                Button { move(-1) } label: { Image(systemName: "chevron.up") }
+                    .disabled(isFirst).help("Move up").accessibilityLabel("Move \(track.url.lastPathComponent) up")
+                Button { move(1) } label: { Image(systemName: "chevron.down") }
+                    .disabled(isLast).help("Move down").accessibilityLabel("Move \(track.url.lastPathComponent) down")
+                Button(action: remove) { Image(systemName: "minus.circle") }
+                    .disabled(!canRemove).help("Remove from this audiobook")
+                    .accessibilityLabel("Remove \(track.url.lastPathComponent)")
+            }
+        }
+        .buttonStyle(.borderless)
+        .help(track.url.path)
+    }
+}
+
+/// The big "Add to queue" button at the top of a book's or job's panel, or what's happening to it.
+struct QueueButton: View {
+    let state: BookState
+    let queued: Bool
+    let add: () -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        HStack {
+            switch state {
+            case .rendering:
+                Label("Rendering now", systemImage: "waveform").foregroundColor(.accentColor)
+            case .done, .skipped:
+                Label("Finished", systemImage: "checkmark.circle.fill").foregroundColor(.green)
+                Spacer()
+                Button("Make it again", action: add)
+            default:
+                if queued {
+                    Label("In the queue: it will be made when its turn comes", systemImage: "clock")
+                        .foregroundColor(.orange)
+                    Spacer()
+                    Button("Take out", action: remove)
+                } else {
+                    Button(action: add) {
+                        Label("Add to queue", systemImage: "plus.circle.fill").frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
+                    .help("Queue it; the queue starts by itself if it isn't running")
+                }
+            }
+        }
     }
 }
 

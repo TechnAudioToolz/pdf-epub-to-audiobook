@@ -16,6 +16,7 @@ A folder of MP3s (one per chapter or part) instead:
   The cover is --cover, else a picture inside the MP3s, else cover.jpg/folder.jpg in the folder, else generated.
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -312,6 +313,53 @@ def probe(src):
     return info
 
 
+_WORDS = None
+
+
+def split_words(token):
+    """'Conversationswith' -> 'Conversations with', using the system word list (fewest, longest words)."""
+    global _WORDS
+    if len(token) < 5 or not token[1:].islower():
+        return token
+    if _WORDS is None:
+        try:
+            base = {w.strip().lower() for w in open("/usr/share/dict/words") if len(w.strip()) > 1 or w.strip() in "aAI"}
+            _WORDS = base | {w + "s" for w in base} | {w + "es" for w in base}  # the list has no plurals
+        except OSError:
+            _WORDS = set()
+    low = token.lower()
+    if low in _WORDS or not _WORDS:
+        return token
+    # cheapest split: each word costs 2, common little words cost 1 ("lessons of", not "les sons of")
+    common = set("a an and as at by for from in into of on or the to with without".split())
+    cost = lambda ws: sum(1 if w in common else 2 for w in ws)
+    best = [None] * (len(low) + 1)
+    best[0] = []
+    for i in range(1, len(low) + 1):
+        for j in range(max(0, i - 20), i):
+            if best[j] is not None and low[j:i] in _WORDS:
+                cand = best[j] + [low[j:i]]
+                if best[i] is None or cost(cand) < cost(best[i]):
+                    best[i] = cand
+    if not best[-1] or len(best[-1]) > max(2, len(low) // 3):
+        return token  # no clean split: leave it alone
+    words = best[-1]
+    words[0] = token[:len(words[0])]  # keep the original capital
+    return " ".join(words)
+
+
+def readable_name(stem):
+    """'ASeparateRealityPart1FurtherConversations_mp332' -> 'A Separate Reality Part 1 Further Conversations'."""
+    name = re.sub(r"[_\s-]*(mp3|aac|m4a)?[_\s-]*\d*\s*(kbps|kb|k)?$", "", stem, flags=re.I) if re.search(r"(mp3|kbps|kb)\d*$", stem, re.I) else stem
+    name = name.replace("_", " ")
+    if " " not in name.strip():  # run-together words: split at capitals and numbers, then by dictionary
+        name = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", name)
+        name = " ".join(split_words(w) for w in name.split())
+        name = re.sub(r"(?<=\S )\b(And|Of|The|In|On|With|To|For|A|An)\b", lambda m: m.group(1).lower(), name)
+        name = name[:1].upper() + name[1:]
+    return re.sub(r"\s+", " ", name).strip()
+
+
 def chapter_names(files, infos):
     """Each file's title tag if they're all different, else its file name without the leading track number."""
     titles = [i.get("title", "").strip() for i in infos]
@@ -320,7 +368,7 @@ def chapter_names(files, infos):
     names = []
     for n, f in enumerate(files, 1):
         name = re.sub(r"^[\s\d._-]*(track|part|chapter)?[\s\d._-]+(?=\D)", "", f.stem, flags=re.I).strip(" -_.")
-        names.append(name.replace("_", " ") or f"Part {n}")
+        names.append(readable_name(name) or f"Part {n}")
     return names
 
 
@@ -337,7 +385,19 @@ def join_plan(args):
             i["album"] = re.sub(r"[\s,:_-]*[(\[]?\b(disc|disk|cd|part)\s*\d+\s*(of\s*\d+)?[)\]]?\s*$", "", i["album"], flags=re.I).strip()
     common = lambda key: max(({i.get(key) for i in infos} - {None, ""}), key=lambda v: sum(i.get(key) == v for i in infos), default="")
     folder = args.inputs[0] if args.inputs[0].is_dir() else files[0].parent
-    title, author = title_and_author(common("album"), common("album_artist") or common("artist"), Path(folder.name))
+    source_name = folder.name
+    if not args.inputs[0].is_dir() and len(files) < len(audio_files([folder])):
+        # some of a folder's files: their shared beginning names them better than the folder does
+        if len(files) > 1:
+            prefix = os.path.commonprefix([f.stem for f in files])
+            prefix = re.sub(r"[\s_-]*(part|disc|cd|track|chapter)?[\s_-]*\d*$", "", prefix, flags=re.I)
+        else:
+            prefix = files[0].stem
+        if len(prefix) >= 4:
+            source_name = readable_name(prefix)
+    title, author = title_and_author(common("album"), common("album_artist") or common("artist"), Path(source_name))
+    if not args.inputs[0].is_dir() and source_name != folder.name and not author:
+        author = title_and_author(None, None, Path(folder.name))[1]  # "Author - Series" folder: keep its author
     plan = dict(files=files, infos=infos, names=chapter_names(files, infos),
                 title=args.title or title, author=args.author or author)
     # named after the source (not the title), so editing the title keeps the converted files
@@ -379,9 +439,10 @@ def join(args):
     files, infos, names, work = plan["files"], plan["infos"], plan["names"], plan["work"]
     total = sum(i["duration"] for i in infos)
     print(f"{plan['title']} — {plan['author'] or 'unknown author'}")
-    print(f"{len(files)} files, {total / 3600:.1f} h of audio")
+    print(f"{len(files)} file{'' if len(files) == 1 else 's'}, {total / 3600:.1f} h of audio")
     for n, (name, info) in enumerate(zip(names, infos), 1):
-        print(f"  {n:3d}. {name}\t{fmt(info['duration'])[:8]}")
+        where = f"\t{files[n - 1].resolve()}" if args.show_paths else ""  # the app keeps its file list from these
+        print(f"  {n:3d}. {name}\t{fmt(info['duration'])[:8]}{where}")
     print(f"Cover: {plan['cover_note']}")
     print(f"Cover image: {plan['cover']}")
     if args.check:
@@ -422,6 +483,10 @@ def join(args):
 
     name = re.sub(r'[/:\\*?"<>|]+', "", f"{plan['author']} - {plan['title']}" if plan["author"] else plan["title"]).strip()
     out = (args.output or (args.output_dir or PROJECT / "output") / f"{name}.m4b").resolve()
+    n = 2
+    while out.exists() and not args.output:  # never replace another audiobook with the same name
+        out = out.with_name(f"{name} ({n}).m4b")
+        n += 1
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"Joining {len(parts)} chapters into one M4B...", flush=True)
     # Inside the work dir with relative names: ffmpeg misparses some absolute paths containing "#".
@@ -454,6 +519,7 @@ def main():
     j = sub.add_parser("join", help="join a folder of MP3s into one M4B, one chapter per file")
     j.add_argument("inputs", nargs="+", type=Path, help="audio files and/or folders of them")
     j.add_argument("--check", action="store_true", help="list the chapters, title and cover, then stop")
+    j.add_argument("--show-paths", action="store_true", help="with --check: also print each file's full path")
     j.add_argument("--cover", type=Path)
     j.add_argument("--title")
     j.add_argument("--author")

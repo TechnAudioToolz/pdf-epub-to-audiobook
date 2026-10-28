@@ -48,6 +48,8 @@ final class Book: ObservableObject, Identifiable {
     @Published var coverChoices: [CoverChoice] = []
     /// One continuous file without chapter markers (for books whose chapters aren't found well).
     @Published var oneFile = false
+    /// Waiting its turn in the queue. Only queued books and jobs are made.
+    @Published var queued = false
     @Published var loadingCoverChoices = false
     @Published var generatingCover = false
 
@@ -278,7 +280,12 @@ final class AppModel: ObservableObject {
         book.state = .checking
         book.chapters = []
         var titleLine = true
+        var problem = ""
         engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--dry-run", "--no-notify"], onLine: { line in
+            if let reason = EngineOutput.problem(line) { problem = reason }
+            if let m = EngineOutput.match(#"^OCR page (\d+)/(\d+)"#, line) {
+                book.summary = "Scanned book: reading page \(m[1]) of \(m[2]) (once; it's saved)…"
+            }
             if titleLine, line.contains(" — ") {
                 titleLine = false
                 let parts = line.components(separatedBy: " — ")
@@ -298,7 +305,7 @@ final class AppModel: ObservableObject {
             }
         }, onExit: { status in
             if book.state == .checking {
-                book.state = status == 0 ? .ready : .failed("Couldn't read this file")
+                book.state = status == 0 ? .ready : .failed(problem.isEmpty ? "Couldn't read this file." : problem)
             }
         })
     }
@@ -343,8 +350,34 @@ final class AppModel: ObservableObject {
 
     // MARK: the queue
 
+    /// The toolbar's Start: queues everything that isn't made yet (if nothing is queued), then runs the queue.
     func startQueue() {
+        let waiting: (BookState) -> Bool = { [.waiting, .ready, .checking].contains($0) }
+        if !books.contains(where: { $0.queued }) && !jobs.contains(where: { $0.queued }) {
+            books.filter { waiting($0.state) }.forEach { $0.queued = true }
+            jobs.filter { waiting($0.state) }.forEach { $0.queued = true }
+        }
+        runQueue()
+    }
+
+    func addToQueue(_ book: Book) {
+        if book.state == .done || book.state == .skipped || { if case .failed = book.state { return true }; return false }() {
+            book.state = .ready
+        }
+        book.queued = true
+        runQueue()
+    }
+
+    func addToQueue(_ job: AudioJob) {
+        if job.state == .done || { if case .failed = job.state { return true }; return false }() { job.state = .ready }
+        job.queued = true
+        runQueue()
+    }
+
+    /// Starts working through the queue, unless it already is (then new items are picked up in turn).
+    func runQueue() {
         guard !isRunning else { return }
+        lastMessage = ""
         isRunning = true
         stopRequested = false
         renderNext()
@@ -381,12 +414,13 @@ final class AppModel: ObservableObject {
     }
 
     func renderNext() {
-        if !stopRequested, books.first(where: { [.waiting, .ready, .checking].contains($0.state) }) == nil,
-           let job = jobs.first(where: { [.waiting, .ready, .checking].contains($0.state) }) {
+        let next: (BookState) -> Bool = { [.waiting, .ready, .checking].contains($0) }
+        if !stopRequested, books.first(where: { $0.queued && next($0.state) }) == nil,
+           let job = jobs.first(where: { $0.queued && next($0.state) }) {
             return renderJob(job)  // books first, then the MP3 jobs
         }
         guard !stopRequested, let engine,
-              let book = books.first(where: { [.waiting, .ready, .checking].contains($0.state) }) else {
+              let book = books.first(where: { $0.queued && next($0.state) }) else {
             isRunning = false
             current = nil
             let done = books.filter { $0.state == .done }.count + jobs.filter { $0.state == .done }.count
@@ -394,6 +428,7 @@ final class AppModel: ObservableObject {
             return
         }
         book.state = .rendering
+        book.queued = false
         book.progress = 0
         book.detail = "Starting…"
         var skipped = false
@@ -420,12 +455,15 @@ final class AppModel: ObservableObject {
                 book.progress = 1
             } else if line.hasPrefix("Skipped ") {
                 skipped = true
+            } else if let reason = EngineOutput.problem(line) {
+                lastError = reason
             } else if line.contains("Error") {
                 lastError = line
             }
         }, onExit: { [weak self] status in
             if self?.stopRequested == true {
                 book.state = .ready
+                book.queued = true  // still in the queue: Start picks it up where it stopped
                 book.detail = "Stopped"
             } else if skipped {
                 book.state = .skipped
@@ -463,6 +501,7 @@ final class AppModel: ObservableObject {
         let running = states.filter { $0 == .rendering }.count
         let plural = { (n: Int, word: String) in "\(n) \(word)\(n == 1 ? "" : "s")" }
         let items = jobs.isEmpty ? plural(books.count, "book") : "\(plural(books.count, "book")), \(plural(jobs.count, "MP3 job"))"
-        return "\(items) · \(done) done · \(running) rendering · \(states.count - done - running) waiting"
+        let queued = books.filter(\.queued).count + jobs.filter(\.queued).count
+        return "\(items) · \(done) done · \(running) rendering · \(queued) queued"
     }
 }

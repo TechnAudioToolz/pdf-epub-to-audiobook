@@ -397,10 +397,12 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     pages = [extract_page_lines(p) for p in doc]
     empty = sum(1 for p in pages if not p)
     if empty > len(pages) * 0.5:
-        sys.exit(
-            f"{empty}/{len(pages)} pages have no text layer (scanned PDF). OCR it first:\n"
-            f"  brew install ocrmypdf && ocrmypdf --skip-text '{path}' ocr.pdf"
-        )
+        pages = ocr_pages(path, len(doc))  # a scan: read the page pictures with the Mac's text recognition
+        if pages is None:
+            sys.exit(
+                f"{empty}/{len(pages or doc)} pages have no text layer (scanned PDF), and the text recognition tool "
+                f"isn't available here. Build it with: swiftc -O app/ocr.swift -o bin/ocr"
+            )
 
     body_size = body_font_size(pages)
     repeated = repeated_margin_text(pages)
@@ -501,6 +503,89 @@ def is_page_furniture(ln, repeated, academic, body_size, keep=frozenset()):
     if academic and re.match(r"^(Figure|Fig\.|Table|Chart|Source:)\s*\d*", ln["text"]) and ln["size"] <= body_size:
         return "captions" not in keep
     return False
+
+
+def ocr_exe():
+    """The text recognition tool: the app's own copy (AUDIOBOOK_OCR), else bin/ocr in the project."""
+    for p in (os.environ.get("AUDIOBOOK_OCR"), PROJECT / "bin" / "ocr"):
+        if p and Path(p).is_file():
+            return str(p)
+    return None
+
+
+def ocr_pages(path, count):
+    """Page lines for a scanned PDF, read with the Mac's built-in text recognition (app/ocr.swift).
+    The result is saved, so each book is only read once."""
+    import json
+
+    exe = ocr_exe()
+    if not exe:
+        return None
+    work = PROJECT / "work" / path.stem
+    work.mkdir(parents=True, exist_ok=True)
+    st = path.stat()
+    cache = work / f"ocr-{st.st_size}-{int(st.st_mtime)}.json"
+    if not cache.exists():
+        print(f"Scanned PDF: reading its {count} pages with the Mac's text recognition (about 3 pages a second, "
+              f"saved for next time)...", flush=True)
+        tmp = cache.with_suffix(".tmp")
+        proc = subprocess.Popen([exe, str(path.resolve()), str(tmp)], stdout=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            n = re.match(r"OCR page (\d+)/(\d+)", line)
+            if n and (int(n[1]) % 20 == 0 or n[1] == n[2]):
+                print(line.rstrip(), flush=True)
+        if proc.wait() != 0 or not tmp.exists():
+            return None
+        tmp.rename(cache)
+    return [ocr_page_lines(p) for p in json.loads(cache.read_text())["pages"]]
+
+
+def ocr_page_lines(page):
+    """Recognised text lines in the same shape as extract_page_lines, so the rest of the cleanup and the
+    chapter finding work on scans too. Scanned books mark paragraphs with an indent, not a gap."""
+    w, h = page["width"] or 1, page["height"] or 1
+    # Recognition marks text it is unsure of (diagrams, handwriting, smudges) with low confidence: skip it.
+    raw = sorted((l for l in page["lines"] if l.get("conf", 1) > 0.35), key=lambda l: (l["y0"] + l["y1"]) / 2)
+    # Recognition sometimes splits one printed line in two: merge pieces that sit side by side.
+    rows = []
+    for l in raw:
+        mid, hgt = (l["y0"] + l["y1"]) / 2, l["y1"] - l["y0"]
+        if rows and abs(mid - rows[-1]["mid"]) < 0.4 * max(hgt, rows[-1]["y1"] - rows[-1]["y0"]):
+            r = rows[-1]
+            parts = sorted([(r["x0"], r["text"]), (l["x0"], l["text"])])
+            r.update(text=" ".join(t for _, t in parts), x0=min(r["x0"], l["x0"]), x1=max(r["x1"], l["x1"]),
+                     y0=min(r["y0"], l["y0"]), y1=max(r["y1"], l["y1"]))
+        else:
+            rows.append(dict(l, mid=mid))
+    if not rows:
+        return []
+    long_rows = [r for r in rows if len(r["text"]) > 30] or rows
+    # Line heights from recognition vary with the letters in them (tall capitals, low tails), so sizes are
+    # relative to the page's typical text line: ordinary text is 10, only clearly bigger lines are more.
+    typical = sorted(r["y1"] - r["y0"] for r in long_rows)[len(long_rows) // 2] or 1
+    left = min(r["x0"] for r in long_rows)
+    right = max(r["x1"] for r in long_rows)
+    out, block, prev = [], 0, None
+    for r in rows:
+        height = max(r["y1"] - r["y0"], 0.5)
+        if prev is not None:
+            indent = r["x0"] - left > (right - left) * 0.03
+            ended = prev["x1"] < right - (right - left) * 0.12 and re.search(r"[.!?:\"”’)]\s*$", prev["text"])
+            gap = r["y0"] - prev["y1"] > height * 0.9
+            if indent or ended or gap:
+                block += 1
+        rel = height / typical
+        # only heading-shaped lines (short, starting with a capital or number) may be bigger than the text
+        title_like = len(r["text"]) <= 70 and len(r["text"].split()) <= 10 and re.match(r"[\"“'(]?[A-Z0-9]", r["text"]) and not r["text"].endswith((",", "-"))
+        size = round(rel * 10) if rel >= 1.4 and title_like else 10.0
+        out.append(dict(text=r["text"], size=size, bold=False, y0=r["y0"], y1=r["y1"],
+                        height=height, block=block, block_lines=0,
+                        margin=r["y1"] < h * 0.10 or r["y0"] > h * 0.92, bottom=r["y0"] > h * 0.6, in_table=False))
+        prev = r
+    sizes = Counter(l["block"] for l in out)
+    for l in out:
+        l["block_lines"] = sizes[l["block"]]
+    return out
 
 
 def extract_page_lines(page):

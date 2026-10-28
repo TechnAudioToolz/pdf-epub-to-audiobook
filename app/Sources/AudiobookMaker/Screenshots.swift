@@ -11,11 +11,9 @@ enum Screenshots {
         // the demo changes these saved settings; put them back afterwards
         let savedVoice = UserDefaults.standard.string(forKey: "voice")
         let savedOutput = UserDefaults.standard.string(forKey: "outputPath")
-        let savedShowLog = model.showLog
         func restore() {
             UserDefaults.standard.set(savedVoice, forKey: "voice")
             UserDefaults.standard.set(savedOutput, forKey: "outputPath")
-            UserDefaults.standard.set(savedShowLog, forKey: "showLog")
         }
         loadDemo(model)
         try? await Task.sleep(nanoseconds: 1_500_000_000)

@@ -193,7 +193,8 @@ struct ContentView: View {
                     ForEach(model.booksInOrder) { book in
                         BookRow(book: book, position: model.queuePosition(book.id),
                                 move: { model.moveInQueue(book.id, by: $0) },
-                                isLastInQueue: model.queuePosition(book.id) == model.queueOrder.count)
+                                isLastInQueue: model.queuePosition(book.id) == model.queueOrder.count,
+                                paused: model.isPaused)
                             .tag(book.id)
                             .contentShape(Rectangle())
                             .simultaneousGesture(TapGesture().onEnded { model.selection = book.id })

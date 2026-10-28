@@ -131,9 +131,7 @@ final class AppModel: ObservableObject {
     @Published var liveStatus = ""
     /// While a book is being checked: "Checking The Circuit of Force: page 120 of 244 (49%)".
     @Published var checkStatus = ""
-    @Published var showLog = UserDefaults.standard.bool(forKey: "showLog") {
-        didSet { UserDefaults.standard.set(showLog, forKey: "showLog") }
-    }
+    @Published var showLog = false  // the Log starts closed each time; ⌘L opens it
     @Published var engine = Engine.locate()
     @Published var lastMessage = ""
 
@@ -503,6 +501,7 @@ final class AppModel: ObservableObject {
         kill(process.processIdentifier, SIGSTOP)
         isPaused = true
         if let book = books.first(where: { $0.state == .rendering }) { book.detail = "Paused · " + book.detail }
+        if let job = jobs.first(where: { $0.state == .rendering }) { job.detail = "Paused · " + job.detail }
         appendLog("— Paused —")
     }
 
@@ -512,6 +511,9 @@ final class AppModel: ObservableObject {
         isPaused = false
         if let book = books.first(where: { $0.state == .rendering }) {
             book.detail = book.detail.replacingOccurrences(of: "Paused · ", with: "")
+        }
+        if let job = jobs.first(where: { $0.state == .rendering }) {
+            job.detail = job.detail.replacingOccurrences(of: "Paused · ", with: "")
         }
         appendLog("— Resumed —")
     }
@@ -552,6 +554,12 @@ final class AppModel: ObservableObject {
         var chapter = ""
         appendLog("=== \(book.displayTitle) ===")
         current = engine.run([engine.script("audiobook.py")] + commonArgs(book) + ["--verbose"], onLine: { [weak self] line in
+            if let m = EngineOutput.match(#"^(OCR|Reading) page (\d+)/(\d+)"#, line) {
+                // reading the book before the voice starts: the updating line, not the Log
+                self?.liveStatus = "Reading \(book.displayTitle): page \(m[2]) of \(m[3])"
+                book.detail = "Reading the book: page \(m[2]) of \(m[3])"
+                return
+            }
             if let report = EngineOutput.report(line) {
                 // progress every ~10 seconds: one updating line, not a log entry
                 if let pct = report.bookPercent { book.progress = Double(pct) / 100 }

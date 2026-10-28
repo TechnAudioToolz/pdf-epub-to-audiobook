@@ -12,7 +12,7 @@ enum BookState: Equatable {
         case .ready: return "Ready"
         case .rendering: return "Rendering"
         case .done: return "Done"
-        case .skipped: return "Already done"
+        case .skipped: return "Already made"
         case .failed: return "Failed"
         }
     }
@@ -49,6 +49,8 @@ final class Book: ObservableObject, Identifiable {
     @Published var coverChoices: [CoverChoice] = []
     /// One continuous file without chapter markers (for books whose chapters aren't found well).
     @Published var oneFile = false
+    /// "Make it again": replace the audiobook that's already in the output folder.
+    @Published var remake = false
     /// Waiting its turn in the queue. Only queued books and jobs are made.
     @Published var queued = false
     @Published var loadingCoverChoices = false
@@ -306,6 +308,7 @@ final class AppModel: ObservableObject {
         if !book.author.isEmpty { args += ["--author", book.author] }
         if let cover = book.coverURL { args += ["--cover", cover.path] }
         if book.oneFile { args.append("--no-chapters") }
+        if book.remake { args.append("--force") }
         return args
     }
 
@@ -439,6 +442,7 @@ final class AppModel: ObservableObject {
     }
 
     func addToQueue(_ book: Book) {
+        if book.state == .done || book.state == .skipped { book.remake = true }
         makeReady(&book.state)
         book.queued = true
         enqueue(book.id)
@@ -579,6 +583,11 @@ final class AppModel: ObservableObject {
                 book.progress = 1
             } else if line.hasPrefix("Skipped ") {
                 skipped = true
+                // "Skipped book.pdf: already exists: Book.m4b (use --force to redo)"
+                if let name = EngineOutput.match(#"already exists: (.+?) \(use --force"#, line)?[1],
+                   let folder = self?.outputFolder {
+                    book.output = folder.appendingPathComponent(name)
+                }
             } else if let reason = EngineOutput.problem(line) {
                 lastError = reason
             } else if line.contains("Error") {
@@ -597,8 +606,9 @@ final class AppModel: ObservableObject {
                 book.detail = "Stopped"
             } else if skipped {
                 book.state = .skipped
-                book.detail = "Already in the output folder"
+                book.detail = "Made earlier: \(book.output?.lastPathComponent ?? "it's in the output folder")"
             } else if status == 0 {
+                book.remake = false
                 book.state = .done
                 book.detail = book.output?.lastPathComponent ?? "Done"
             } else {

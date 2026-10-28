@@ -491,9 +491,11 @@ struct QueueButton: View {
             case .rendering:
                 Label("Rendering now", systemImage: "waveform").foregroundColor(.accentColor)
             case .done, .skipped:
-                Label("Finished", systemImage: "checkmark.circle.fill").foregroundColor(.green)
+                Label(state == .skipped ? "Already made earlier: it's in the output folder" : "Finished",
+                      systemImage: "checkmark.circle.fill").foregroundColor(.green)
                 Spacer()
                 Button("Make it again", action: add)
+                    .help("Make it again and replace the existing audiobook")
             default:
                 if queued {
                     Label(queueText, systemImage: "clock").foregroundColor(.orange).lineLimit(2)

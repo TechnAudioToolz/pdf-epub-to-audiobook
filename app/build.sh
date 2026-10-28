@@ -23,6 +23,9 @@ UV_BIN="$(command -v uv || true)"
 [ -x ../.venv/bin/uv ] && UV_BIN=../.venv/bin/uv
 [ -n "$UV_BIN" ] || { echo "uv not found: run ../.venv/bin/python -m pip install uv"; exit 1; }
 cp "$UV_BIN" "$APP/Contents/Resources/bin/uv"
+# Text recognition for scanned PDFs (the Mac's built-in Live Text engine); also to ../bin for command-line use.
+swiftc -O -target arm64-apple-macos13.0 ocr.swift -o "$APP/Contents/Resources/bin/ocr"
+mkdir -p ../bin && cp "$APP/Contents/Resources/bin/ocr" ../bin/ocr
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 # Signature. With a self-signed "Audiobook Maker Dev" code-signing certificate in your Keychain, every

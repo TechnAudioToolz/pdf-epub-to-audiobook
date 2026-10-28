@@ -111,7 +111,8 @@ enum Screenshots {
                           color: NSColor(calibratedRed: 0.55, green: 0.20, blue: 0.24, alpha: 1))
         job.state = .ready
         job.summary = "12 files, 5.4 h of audio"
-        job.chapters = (1...12).map { "Book \($0)  ·  00:27:00" }
+        job.tracks = (1...12).map { Track(url: URL(fileURLWithPath: "/Audiobooks/Meditations/Meditations - Book \($0).mp3"),
+                                          name: "Book \($0)", duration: "00:27:00") }
         model.jobs = [job]
         model.selection = london.id
         model.voice = "bm_george"

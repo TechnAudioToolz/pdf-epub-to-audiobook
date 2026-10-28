@@ -28,3 +28,4 @@ app/build/
 # app assets are images too, but belong in the repo
 !app/Resources/*.png
 !docs/screenshots/*.png
+/bin/

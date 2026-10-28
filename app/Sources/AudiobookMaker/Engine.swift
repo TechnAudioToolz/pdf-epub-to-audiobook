@@ -79,6 +79,10 @@ struct Engine {
         env["HF_HUB_OFFLINE"] = "1"
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
         env["DO_NOT_TRACK"] = "1"
+        // the app's own text recognition tool, for scanned PDFs
+        if let ocr = Bundle.main.url(forResource: "ocr", withExtension: nil, subdirectory: "bin") {
+            env["AUDIOBOOK_OCR"] = ocr.path
+        }
         // the installed copy's own ffmpeg first, then Homebrew (developer setups)
         env["PATH"] = root.appendingPathComponent("bin").path + ":/opt/homebrew/bin:/usr/local/bin:"
             + (env["PATH"] ?? "/usr/bin:/bin")
@@ -186,6 +190,17 @@ enum EngineOutput {
     /// "Wrote /path/to/output/book.m4b  (3.2 h, 11 chapters, 101 MB)", or a folder of MP3s
     static func wrote(_ line: String) -> URL? {
         match(#"^Wrote (.+?)  \("#, line).map { URL(fileURLWithPath: $0[1]) }
+    }
+
+    /// The engine's reason for giving up on a book, in plain words.
+    static func problem(_ line: String) -> String? {
+        if line.contains("no text layer") || line.contains("No readable text") {
+            return "This PDF is a scan (its pages are pictures), and the text recognition couldn't read it. "
+                + "Check the Log (⌘L) for details."
+        }
+        if line.hasPrefix("Unsupported file type") { return "This kind of file isn't supported. Use a PDF, EPUB or TXT." }
+        if line.contains("Error:") || line.hasPrefix("Traceback") { return line }
+        return nil
     }
 
     /// "  Mathers (22), Logoidal (14), ..."  from --list-unknown

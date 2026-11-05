@@ -280,7 +280,7 @@ def title_and_author(title, author, path, page_title=None, page_author=None):
     The title page (page_title / page_author) wins when it agrees with either: it's what the book says."""
     def useful(v):
         v = re.sub(r"\s+", " ", v or "").strip()
-        junk = re.match(r"(?i)^(untitled|unknown|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|"
+        junk = re.match(r"(?i)^(untitled|unknown|anonymous|anon|unspecified|none|null|title|author|admin(istrator)?|user|owner|microsoft word\b.*|"
                         r".*\b(createspace|word templates?|template|lightning source|ingram|acrobat|distiller|abbyy|"
                         r"finereader|pscript\d*|pdf ?creator|scansnap|kindle direct)\b.*|"
                         r"(layout|document|untitled|book|print|pages?|doc)[\s_-]*\d*|"
@@ -291,13 +291,19 @@ def title_and_author(title, author, path, page_title=None, page_author=None):
 
     title, author = useful(title), useful(author)
     if not title:
-        stem = re.sub(r"[_]+", " ", path.stem).strip()
+        stem = re.sub(r"\s*(\(\d+\)|copy( \d+)?)$", "", path.stem.strip(), flags=re.I)  # "Book (1)", "Book copy"
+        stem = re.sub(r"_ ", ": ", stem)  # a colon that couldn't be in a file name: "Mind and Nature_ A Necessary Unity"
+        stem = re.sub(r"[_\s]+", " ", stem).strip()
         left, sep, right = (part.strip() for part in stem.partition(" - "))
+        # "Author, Title, City, Publisher, 1979"
+        cited = re.match(r"^([^,]+), (.+?)(, [^,]+){0,2}, (1[5-9]|20)\d\d$", stem)
+        if not sep and cited and name_score(cited[1]) > name_score(cited[2]):
+            left, sep, right = cited[1], ",", cited[2]
         if not sep:
             left, right = "", stem
         # "Author - Title" is usual, but "Title - Author" is common too: the side that reads more like a
         # person's name is the author. "Frequency - Penney Peirce" swaps; "Gaukroger - Cartesian Logic" doesn't.
-        if name_score(right) > name_score(left):
+        if left and name_score(right) > name_score(left):
             left, right = right, left
         title, author = right, author or left
     if page_title:
@@ -499,6 +505,7 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     # instead of the full layout analysis, which takes minutes on hundreds of picture pages.
     empty = sum(1 for p in doc if not p.get_text("text").strip())
     pages = []
+    origin = None  # for scans of two-page spreads: the PDF page each half came from
     if empty <= len(doc) * 0.5:
         for n, p in enumerate(doc, 1):
             pages.append(extract_page_lines(p))
@@ -506,6 +513,8 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
                 print(f"Reading page {n}/{len(doc)}", flush=True)  # the app shows this while checking
     if empty > len(doc) * 0.5:
         pages = ocr_pages(path, len(doc))  # a scan: read the page pictures with the Mac's text recognition
+        if pages is not None:
+            pages, origin = pages
         if pages is None:
             sys.exit(
                 f"{empty}/{len(pages or doc)} pages have no text layer (scanned PDF), and the text recognition tool "
@@ -557,17 +566,26 @@ def load_pdf(path: Path, academic: bool, keep=frozenset()) -> Book:
     # Sorted by page: some PDFs list a section after one that starts later in the book.
     toc = sorted(((lvl, t, pg - 1) for lvl, t, pg in doc.get_toc() if pg >= 1), key=lambda e: e[2])
     toc = chapter_bookmarks(toc, len(doc))
+    if origin:  # bookmarks point at PDF pages; a spread's left half comes first
+        toc = [(lvl, t, origin.index(pg)) for lvl, t, pg in toc if pg in origin]
     if len(toc) < 2:
         stream = section_headings_from_headers(stream, pages)
     chapters = split_pdf_by_toc(stream, toc) if len(toc) >= 2 else split_pdf_by_headings(stream, pages, body_size)
     substantial = sum(1 for c in chapters if sum(len(p.split()) for p in c.paragraphs) >= 500)
     named = [c.title for c in chapters if c.title not in ("Opening", "Front matter")]
     titles_ok = sum(map(heading_like, named)) >= 0.6 * len(named) if named else False
-    if len(toc) < 2 and (substantial < 4 or not titles_ok):
+    if len(toc) < 2:
         # Chapter titles drawn as pictures leave no headings in the text, and on scans the headings found can be
-        # ordinary sentences ("Descartes moves in both cases…"); the running header still names the chapter.
+        # ordinary sentences ("Descartes moves in both cases…"); the running header (or footer) still names
+        # the chapter. Used when the headings look wrong, or leave a few huge chapters where it finds more.
         by_header = split_pdf_by_running_headers(stream, pages)
-        if len(by_header) >= 4:
+        if len(by_header) < 4:
+            by_header = split_pdf_by_running_headers(stream, pages, bottom=True)
+        size = lambda c: sum(len(p.split()) for p in c.paragraphs)
+        biggest = lambda chs: max(map(size, chs), default=0)
+        # headings that missed most chapters leave one or two huge ones (a third of the book or more)
+        lopsided = biggest(chapters) > 0.3 * sum(map(size, chapters)) and biggest(by_header) < 0.7 * biggest(chapters)
+        if len(by_header) >= 4 and (substantial < 4 or not titles_ok or lopsided):
             chapters = by_header
     cover, cover_page = pdf_cover(doc)
     note = f"page {cover_page + 1} of the PDF" if cover else ""
@@ -707,7 +725,28 @@ def ocr_pages(path, count):
         tmp.rename(cache)
         for old in work.glob("ocr-*.json"):
             old.unlink()
-    return [ocr_page_lines(p) for p in json.loads(cache.read_text())["pages"]]
+    pages, origin = [], []
+    for n, page in enumerate(json.loads(cache.read_text())["pages"]):
+        for half in split_spread(page):
+            pages.append(ocr_page_lines(half))
+            origin.append(n)
+    return pages, origin
+
+
+def split_spread(page):
+    """A scan of an open book holds two pages side by side. Read as one, each line would run on into the
+    line beside it on the other page, so split it at the gutter: wider than tall, with text on both sides
+    and next to nothing crossing the middle."""
+    w, h, lines = page["width"], page["height"], page["lines"]
+    if w < h * 1.15 or len(lines) < 4:
+        return [page]
+    mid = w / 2
+    crossing = sum(1 for l in lines if l["x0"] < mid - w * 0.02 and l["x1"] > mid + w * 0.02)
+    left = [l for l in lines if (l["x0"] + l["x1"]) / 2 < mid]
+    right = [dict(l, x0=l["x0"] - mid, x1=l["x1"] - mid) for l in lines if (l["x0"] + l["x1"]) / 2 >= mid]
+    if crossing > len(lines) * 0.05 or not (left and right):
+        return [page]
+    return [dict(page, width=mid, lines=left), dict(page, width=mid, lines=right)]
 
 
 def ocr_page_lines(page):
@@ -832,18 +871,33 @@ def margin_key(t):
 
 def same_headers(counts, min_pages=3):
     """Maps each margin text to the header it is a copy of. Scanned pages are read with small slips
-    ("discovery and proor", "quick and slow tires"), so a text that is nearly the same as one seen on
-    min_pages+ pages counts as that one."""
+    ("discovery and proor", "quick and slow tires", "EVERY SCHOOLBOY KNOWS • • •"), so a text that is nearly
+    the same as one seen on min_pages+ pages counts as that one. A slip seen on a few pages itself still
+    belongs to a header seen on many times more ("MIND AND NATlJRE" twice, "MIND AND NATURE" on every other
+    page); headers seen about as often are kept apart ("Driving the Elixir…" and "Preparing the Elixir…")."""
     import difflib
 
-    common = sorted((k for k, n in counts.items() if n >= min_pages and re.search(r"[a-z]{3}", k)), key=lambda k: -counts[k])
-    out = {}
-    for k in counts:
-        if k in common or not re.search(r"[a-z]{3}", k):
-            out[k] = k
-            continue
-        out[k] = next((c for c in common if abs(len(c) - len(k)) <= max(3, len(c) // 6)
-                       and difflib.SequenceMatcher(None, k, c).ratio() >= 0.85), k)
+    words = lambda k: re.sub(r"[^a-z#]+", " ", k).strip()
+    ranked = sorted((k for k in counts if re.search(r"[a-z]{3}", k)), key=lambda k: -counts[k])
+    rank = {k: i for i, k in enumerate(ranked)}
+    out = {k: k for k in counts}
+    for k in ranked:
+        best, score = None, 0.85  # the closest match, so a slip of one header never joins its look-alike
+        for c in ranked[:rank[k]]:
+            if counts[c] < min_pages:
+                break
+            if words(c) == words(k):
+                best = c
+                break
+            if abs(len(c) - len(k)) <= max(3, len(c) // 6):
+                r = difflib.SequenceMatcher(None, words(k), words(c)).ratio()
+                # a rare text, or one far rarer than c, may differ more; a one-letter slip ("Migrocosmic")
+                # just needs c to be the commoner one
+                need = 0.85 if counts[k] < min_pages or counts[c] >= 8 * counts[k] else 0.93 if counts[c] >= 2 * counts[k] else 2
+                if r >= max(score, need):
+                    best, score = c, r
+        if best:
+            out[k] = out[best]
     return out
 
 
@@ -918,7 +972,7 @@ def heading_like(t):
 
 def chapter_bookmarks(toc, page_count):
     """Scanners and converters often bookmark every page ("Image 0013", "000007.pdf", "Page 12", "scan0004");
-    those aren't chapters. Drops them, and the whole list when they're most of it, so chapters are found
+    "Scansione dic 09, 2022 (13)"); those aren't chapters. Drops them, and the whole list when they're most of it, so chapters are found
     from the text instead. Bare numbers ("1", "2") only count as page labels when there's about one per page."""
     def page_label(t):
         t = re.sub(r"(?i)\.(pdf|jpe?g|png|tiff?|gif|bmp|jp2|djvu)$", "", t.strip())
@@ -926,7 +980,10 @@ def chapter_bookmarks(toc, page_count):
         t = re.sub(r"(?i)\b(image|img|page|pg|p|scan|picture|pic|photo|dsc|file|seite|bild)(?=[\W\d_]|$)", "", t)
         return not re.search(r"[^\W\d_]", t) and (not bare or len(toc) > page_count / 3)
 
-    kept = [e for e in toc if not page_label(e[1])]
+    # one name with a changing number or date: "Scansione dic 09, 2022 (13)", "Scan 2019-04-02 (7)"
+    shape = Counter(re.sub(r"[\W\d_]+", " ", e[1]).strip().lower() for e in toc)
+    repeated = {k for k, n in shape.items() if n >= 3 and n >= len(toc) / 3}
+    kept = [e for e in toc if not page_label(e[1]) and re.sub(r"[\W\d_]+", " ", e[1]).strip().lower() not in repeated]
     return kept if len(kept) >= len(toc) / 2 else []
 
 
@@ -996,12 +1053,12 @@ def split_pdf_by_headings(stream, pages, body_size):
     return chapters
 
 
-def split_pdf_by_running_headers(stream, pages):
+def split_pdf_by_running_headers(stream, pages, bottom=False):
     """Chapters from the running header at the top of each page ("The Grand Tour" on the pages of that
     chapter), for PDFs whose chapter titles are pictures. A header seen across much of the book is the
-    book's own title and is ignored."""
+    book's own title and is ignored. bottom: use the footers instead ("3 • INTRODUCTION")."""
     first, last, title = {}, {}, {}
-    tops = [[ln for ln in lines if ln["margin"] and not ln["bottom"]] for lines in pages]
+    tops = [[ln for ln in lines if ln["margin"] and ln["bottom"] == bottom] for lines in pages]
     key_of = lambda ln: re.sub(r"[“”]", '"', margin_key(ln["text"])).strip("# ")
     same = same_headers(Counter(key_of(ln) for lines in tops for ln in lines), min_pages=2)
     for pno, lines in enumerate(tops):
@@ -1012,21 +1069,26 @@ def split_pdf_by_running_headers(stream, pages):
             first.setdefault(key, pno)
             last[key] = pno
             if key == key_of(ln) or key not in title:  # the header's own spelling, not a misread copy
-                t = re.sub(r"^\d+\s+|\s+\d+$", "", ln["text"].strip())
+                t = re.sub(r"^[\d\s•·|=*-]+|[\s\d•·|=*-]+$", "", ln["text"].strip())  # "3 • INTRODUCTION"
                 title[key] = tidy_title(t) if t.isupper() else t
     keys = sorted((k for k in first if first[k] != last[k] and last[k] - first[k] < len(pages) * 0.3), key=first.get)
     if len(keys) < 4:
         return []
 
-    def opening(pno):  # a picture-only title page, or a first line in capitals: "NOT ALL OF MY INFORMATION…"
-        lines = pages[pno]
-        return not lines or bool(re.match(r"^[A-Z][A-Z’'\-]+( [A-Z’'\-]+){2,}", lines[0]["text"]))
+    def opening(pno, key):  # a picture-only title page, a first line in capitals ("NOT ALL OF MY INFORMATION…"),
+        lines = pages[pno]   # or the chapter's own title at the top ("I INTRODUCTION*")
+        return not lines or bool(re.match(r"^[A-Z][A-Z’'\-]+( [A-Z’'\-]+){2,}", lines[0]["text"])) \
+            or bool(re.match(rf"((?:[ivxlc]+|\d+) )?{re.escape(norm_title(key))}\b",
+                             norm_title(" ".join(l["text"] for l in body(lines, key)[:4]))))
+
+    def body(lines, key):  # without the running header itself
+        return [ln for ln in lines if same.get(key_of(ln)) != key]
 
     # A chapter's first page has no header: start at the latest opening page before its first header.
     bounds, prev_end = [], 0
     for k in keys:
         lo = prev_end
-        start = next((p for p in range(first[k], lo - 1, -1) if opening(p)), max(first[k] - 1, lo))
+        start = next((p for p in range(first[k], lo - 1, -1) if opening(p, k)), max(first[k] - 1, lo))
         bounds.append((start, title[k]))
         prev_end = last[k] + 1
     chapters = [Chapter("Opening")]
